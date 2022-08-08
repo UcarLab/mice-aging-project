@@ -1,0 +1,185 @@
+---
+title: "Figure4 - Enrichment Plots"
+author: "E Onur Karakaslar"
+date: "11/05/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+require(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+opts_knit$set(root.dir = "/Users/karako/Dropbox (JAX)/MouseAging_clean/") #set root dir!
+```
+
+```{r library, message=FALSE}
+library(dplyr)
+library(ggplot2)
+source("code/color_values.R")
+```
+
+```{r enrichment_plots}
+# PATH: path of the enriched modules files
+# PATH_TO_SAVE:  
+er_plot <- function(path, path_to_save, gsea = F){
+  
+  file_list <- list.files(path)
+  all_modules <- lapply(file_list, function(x){
+    read.csv(paste0(path, x), stringsAsFactors = F) %>% data.frame
+  })
+  
+  df <- do.call("rbind", all_modules)
+  df$TCT[df$TCT == "naive"] <- "CD8+ Naive"
+  df$TCT[df$TCT == "memory"] <- "CD8+ Memory"
+  df$TCT[df$TCT == "bm"] <- "BM"
+  df$TCT[df$TCT == "spleen"] <- "SPLEEN"
+  df$TCT[df$TCT == "pbl"] <- "PBL"
+  
+  
+  filter_tissues = T
+  if(filter_tissues){
+    df <- df [df$TCT %in% c("CD8+ Naive", "CD8+ Memory"),] 
+  }
+  
+  if (gsea){
+    for (var in unique(df$Geneset)){
+      
+      plot.df <- df[ df$Geneset == var,]
+      
+      if (var == "vp2008"){
+        plot.df <- cleannames(plot.df)
+      }
+      p <- ggplot( plot.df, 
+                  aes(x=pathway, 
+                      y=Contrast, 
+                      color = ifelse(sign(NES %>% as.numeric) < 0, "Negative", "Positive"),
+                      size = ifelse(pval < 0.1, (-log10(pval %>% as.numeric)), NA)
+                      )
+                  ) +
+        xlab("") + ylab("") + 
+        geom_point() + 
+        coord_flip() +
+        facet_wrap(~TCT) + 
+        scale_color_manual(values=c("#2166ACFF","#B2182BFF")) + 
+        scale_y_discrete(name ="Strains", breaks=c("Age18vs3_B6","Age18vs3_NZO"),labels=c("B6", "NZO")) +
+      theme_minimal(base_size = 16) + labs(color = "Sign", size = "-log10(p)")
+        
+      if (var == 'wp'){
+        width_ = 20
+        height_ = 20
+      } else {
+        width_ = 6.5
+        height_ = 6
+      }
+      ggsave(paste0(path_to_save, "GSEA_", var, '.pdf'),
+          plot = p,
+          units = "in",
+          width = width_,
+          height = height_,
+          useDingbats = FALSE)
+    }
+    
+  } else{
+    for (var in unique(df$geneset.name)){
+      p <- ggplot(df[ df$geneset.name == var,] %>% 
+                    mutate(Status = factor(Status)),
+                  aes(x=module.name, y=Contrast, color = Status, size = -log10(p))) + 
+        xlab("") + ylab("") + 
+        geom_point() + 
+        coord_flip() + 
+        facet_wrap(~TCT) + 
+          scale_color_manual(values=c("#2166ACFF","#B2182BFF")) + 
+        scale_y_discrete(name ="", 
+                         breaks=c("Age18vs3_B6","Age18vs3_NZO"), labels=c("B6", "NZO")) +
+        theme_minimal(base_size = 16) + 
+        labs(color = "Regulation", size = "-log10(p)") + 
+        theme(axis.text = element_text(color = "black"))
+        
+      if (var == 'wp'){
+        width_ = 20
+        height_ = 20
+      } else {
+        width_ = 6.5
+        height_ = 6
+      }
+      ggsave(paste0(path_to_save, var, '.pdf'),
+          plot = p,
+          units = "in",
+          width = width_,
+          height = height_,
+          useDingbats = FALSE)
+    } # for
+  } # else
+  
+}
+```
+
+```{r clean inflammation module names}
+cleannames <- function(data){
+  # data <- data %>% filter(geneset.name =="vp2008"|geneset.name == "scrnaseq_pbmc_simple_specific") %>%
+  #   mutate(geneset.name = ifelse(geneset.name =="vp2008", "Gene set from Immune Modules (1)", 
+  #                                "Gene set from Single Cell RNA Modules"))
+  
+  trigger <- F
+  if(any(colnames(data) == "pathway")){
+    colnames(data)[colnames(data) == "pathway"] <- "module.name"
+    trigger <- T
+  }
+  
+  data <- data %>% mutate(module.name = case_when( 
+    (module.name  == "B cells") ~ "B cells",
+    (module.name  == "Cytotoxic cells") ~ "Cytotoxic T/Natural killer cells",
+    (module.name  == "Erythrocytes") ~ "Erythrocytes",
+    (module.name  == "Inflammation I" ) ~ "Inflammatory processes" ,
+    (module.name  == "Inflammation II") ~ "Inflammation molecules",
+    (module.name  == "Interferon-inducible") ~ "Antiviral molecules",
+    (module.name  == "MHC/Ribosomal proteins") ~ "MHC proteins",
+    (module.name  == "Myeloid lineage 1") ~ "Myeloid lineage 1",
+    (module.name  == "Myeloid lineage 2") ~ "Myeloid lineage 2",
+    (module.name  == "Neutrophils" ) ~ "Neutrophils",
+    (module.name  == "Plasma cells") ~ "Plasma cells",
+    (module.name  == "Platelets") ~ "Platelets",
+    (module.name  == "Ribosomal proteins") ~ "Ribosomal proteins",
+    (module.name  == "T Cells") ~ "CD4 and CD8 T-cells",
+    (module.name  == "U_cAMP/NF-KB activation") ~ "TNF-alpha cytokine",
+    (module.name  == "U_enzymes") ~ "Metabolic enzymes",
+    (module.name  == "U_hemoglobin") ~ "Hemoglobin",
+    (module.name  == "U_Immsurface/cytokines/signaling") ~ "Immune surface molecules",
+    (module.name  == "U_Immunity/cytoskeleton") ~ "Cytoskeleton/Immunity related",
+    (module.name  == "U_kinases/phosphatases") ~ "Kinases/RAS",
+    (module.name  == "U_metabolism/replication") ~ "Metabolism/Replication",
+    (module.name  == "U_mitochondrial proteins") ~ "Mitochondrial proteins",
+    (module.name  == "U_P53 signaling" ) ~ "Signaling molecules",
+    (module.name  == "U_protphosphatases/PI3K" ) ~ "Protein phosphatases",
+    (module.name  == "U_proteasome/ubiquitin cx" ) ~ "Proteasome/Ubiquitin",
+    (module.name  == "U_RAS/kinases") ~ "Nuclear factor of activated T cells",
+    (module.name  == "U_T cells/cytoskeleton" ) ~ "T-cells/cytoskeleton",
+    (module.name  == "Unknown") ~ "Unknown",
+    (module.name  == "acCD8_Tcells") ~ "Cytotoxic T-Lymphocytes",
+    (module.name  == "Bcells") ~ "B cells",
+    (module.name  == "DCs") ~ "Dendric Cells",
+    (module.name  == "Erythrocytes") ~ "Erythrocytes",
+    (module.name  == "HSCs") ~ "Hematopoietic stem cells",
+    (module.name  == "Megakaryocytes") ~ "Megakaryocytes",
+    (module.name  == "Monocytes") ~ "Monocytes",
+    (module.name  == "Naive_Tcells") ~ "Naive T-cells",
+    (module.name  == "NK_cells") ~ "Natural killer cells",
+    (module.name  == "pDCs") ~ "Plasmacytoid dendritic cells",
+    (module.name  == "Plasma_cells") ~ "Plasma cells",
+    (module.name  == "Tcells") ~ "CD4 T-cells"))
+  
+  if (trigger){
+    colnames(data)[colnames(data) == "module.name"] <- "pathway"
+  }
+  return(data)
+}
+```
+
+```{r}
+# PART 4
+er_plot("output/F3/Enrichment Files/Hypergeometric/RNAseq/", "output/F3/Enrichment Figures/RNAseq/fm_merged/Cell_types_")
+
+# PART 5 
+er_plot("output/F3/Enrichment Files/GSEA/RNAseq/", "output/F3/Enrichment Figures/RNAseq/fm_merged/Cell_types_", gsea = T)
+```
+
+

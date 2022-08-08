@@ -1,0 +1,516 @@
+---
+title: "Figure3 - RNAseq vs ATACseq Geneset Comparison"
+author: "E Onur Karakaslar"
+date: "1/15/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+require(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+opts_knit$set(root.dir = "/Users/karako/Dropbox (JAX)/MouseAging_clean/") #set root dir!
+```
+
+```{r libraries}
+library(dplyr)
+library(biomaRt)
+library(ggpubr)
+library(VennDiagram)
+library(png)
+library(magick)
+```
+
+```{r convert ensembl to gene name}
+# :( 
+# I found a better and faster way to do this, so it is junk.
+
+# ensembl <- useMart("ensembl", dataset="mmusculus_gene_ensembl")
+# 
+# get_mouse_gene_names <- function(mouse_gene_ids){
+#   foo <- getBM(attributes=c('ensembl_gene_id','external_gene_name'),
+#                filters = 'ensembl_gene_id',
+#                values = mouse_gene_ids,
+#                mart = ensembl)
+#   return(foo)
+# }
+```
+
+```{r }
+# :(
+
+# list <- c("naive", "memory", "pbl", "spleen")
+# 
+# # tct : tissue cell type
+# lapply(list, function(tct){
+#   
+#   genes_rna  <- read.csv(paste0("output/Regulated Gene Lists/RNAseq/RNAseq_",tct,"_Age18vs3_B6_genelist.csv"),
+#                          stringsAsFactors = F)
+#   genes_atac <- read.csv(paste0("output/Regulated Gene Lists/ATACseq/ATACseq_",tct,"_Age18vs3_B6_genelist.csv"),
+#                          stringsAsFactors = F) 
+# 
+#   genes_rna  <- cbind(do.call("rbind", genes_rna$X  %>% strsplit(".", fixed = T)), genes_rna [,-1])
+#   genes_atac <- cbind(do.call("rbind", genes_atac$X %>% strsplit(".", fixed = T)), genes_atac[,-1])
+#   
+#   # Convert RNA ensembl ids to genenames
+#   converted_genes_rna <- get_mouse_gene_names(genes_rna$Gene.Name)
+#   genes_rna$Converted.Genes <- NA
+#   loc_rna <- match(converted_genes_rna$ensembl_gene_id, genes_rna$Gene.Name)
+#   genes_rna$Converted.Genes[loc_rna] <- converted_genes_rna$external_gene_name
+#   
+#   # Divide into up/down regulated genes
+#   up_reg_rna   <- genes_rna[ genes_rna[,1] == "opening_genes",]
+#   down_reg_rna <- genes_rna[!genes_rna[,1] == "opening_genes",]
+#   
+#   up_reg_atac    <- genes_atac[ genes_atac[,1]== "op_genes",]
+#   down_reg_atac  <- genes_atac[!genes_atac[,1]== "op_genes",]
+#   
+#   # Split genes and aliases
+#   up_reg_atac_genes   <- sapply(up_reg_atac$Gene.Name   , function(x) strsplit(x , "|", fixed = T) %>% unlist)
+#   down_reg_atac_genes <- sapply(down_reg_atac$Gene.Name , function(x) strsplit(x , "|", fixed = T) %>% unlist)
+#   
+#   up_reg_rna_genes   <- up_reg_rna$Converted.Genes  [!is.na(up_reg_rna$Converted.Genes)]
+#   down_reg_rna_genes <- down_reg_rna$Converted.Genes[!is.na(down_reg_rna$Converted.Genes)]
+#   
+#   # Compare genes
+#   overlap_up <- sapply(up_reg_atac_genes, function (x, up_reg_rna_genes) {
+#     any(x %in% up_reg_rna_genes)
+#   }, up_reg_rna_genes = up_reg_rna_genes) %>% as.vector
+#   
+#   overlap_down <- sapply(down_reg_atac_genes, function (x, down_reg_rna_genes) {
+#     any(x %in% down_reg_rna_genes)
+#   }, down_reg_rna_genes = down_reg_rna_genes) %>% as.vector
+#   
+#   common_genes_up   <- sapply(up_reg_atac_genes[overlap_up], function(x){x[1]}) %>% as.vector
+#   common_genes_down <- sapply(down_reg_atac_genes[overlap_down], function(x){x[1]}) %>% as.vector
+#   
+#   # write.csv(common_genes_up,
+#   #           paste0("output/Regulated Gene Lists/Common Genes/Up_Regulated_Genes_", tct, ".csv"))
+#   # write.csv(common_genes_down,
+#   #           paste0("output/Regulated Gene Lists/Common Genes/Down_Regulated_Genes_", tct, ".csv"))
+#   
+#   common_up_atac <- up_reg_atac[overlap_up, c("Gene.Name", "logFC")]
+#   common_up_atac$Gene.Name <- common_genes_up
+#   common_up_rna <- up_reg_rna[match(common_genes_up, up_reg_rna$Converted.Genes), c("Converted.Genes", "logFC")]
+#   
+#   common_down_atac <- down_reg_atac[overlap_down, c("Gene.Name", "logFC")]
+#   common_down_atac$Gene.Name <- common_genes_down
+#   common_down_rna <- down_reg_rna[match(common_genes_down, down_reg_rna$Converted.Genes), c("Converted.Genes", "logFC")]
+#   
+#   common_atac <- rbind(common_up_atac, common_down_atac)
+#   common_rna  <- rbind(common_up_rna , common_down_rna)
+#   
+#   logFC_data <- cbind(RNA = common_rna$logFC, ATAC=common_atac$logFC) %>% data.frame
+#   
+#   p_corr <- ggscatter(logFC_data, x = "RNA", y = "ATAC", 
+#         add = "reg.line", conf.int = TRUE, 
+#         cor.coef = TRUE, cor.method = "pearson",
+#         xlab = "logFC (RNAseq)", ylab = "logFC (ATACseq)", rug = F)
+#   
+# ggsave(paste0("output/F3/RNA_ATAC_correlations/", tct, "_correlations.pdf"),
+#        plot = p_corr)
+# })
+```
+
+```{r}
+# list <- c("naive", "memory", "pbl", "spleen")
+# 
+# # tct : tissue cell type
+# lapply(list, function(tct){
+#   
+#   genes_rna  <- read.csv(paste0("output/Regulated Gene Lists/RNAseq/RNAseq_",tct,"_Age18vs3_B6_genelist.csv"),
+#                          stringsAsFactors = F)
+#   genes_atac <- read.csv(paste0("output/Regulated Gene Lists/ATACseq/ATACseq_",tct,"_Age18vs3_B6_genelist.csv"),
+#                          stringsAsFactors = F) 
+#   
+#   # filter first to have significant genes only
+#   genes_atac <- genes_atac[genes_atac$adj.P.Val < 0.05,]
+#   genes_rna  <- genes_rna [genes_rna$adj.P.Val  < 0.05,]
+#   
+#   # genes_atac must be sorted in increasing order of distance to tss!
+#   genes_atac <- genes_atac[!duplicated(genes_atac$Nearest.Ensembl),]
+#   
+#   
+#   common_genes_atac <- genes_atac[na.omit(match(genes_rna$Gene.Name, genes_atac$Nearest.Ensembl)),c("Nearest.Ensembl", "logFC")]
+#   common_genes_rna  <- genes_rna [na.omit(match(genes_atac$Nearest.Ensembl, genes_rna$Gene.Name)),c("Gene.Name", "logFC")]
+#   
+#   common_genes_atac <- common_genes_atac[order(common_genes_atac$Nearest.Ensembl),]
+#   common_genes_rna  <- common_genes_rna [order(common_genes_rna$Gene.Name),]
+#   
+#   names(common_genes_atac) <- names(common_genes_rna)
+#   
+#   cor((common_genes_atac$logFC > 0),(common_genes_rna$logFC > 0))
+#   
+#   
+#   logfc_data <- cbind(ATAC = (common_genes_atac$logFC > 1), RNA = (common_genes_rna$logFC >1)) %>% data.frame
+#   
+#   p_corr <- ggscatter(logfc_data, x = "RNA", y = "ATAC", 
+#                       add = "reg.line", conf.int = TRUE, 
+#                       cor.coef = TRUE, cor.method = "pearson",
+#                       xlab = "logFC (RNAseq)", ylab = "logFC (ATACseq)", rug = F)
+#     
+#   ggsave(paste0("output/F3/RNA_ATAC_correlations/", tct, "_correlations.pdf"),
+#          plot = p_corr)
+#   })
+
+```
+
+
+```{r Venn Schematics and Fisher}
+
+venn.overlap <- function(gene_names_atac, gene_names_rna, file.name){
+  venn.diagram(
+    filename = file.name,
+    x = list(gene_names_atac, gene_names_rna),
+    category.names = c("ATACseq" , "RNAseq"),
+    scaled = F,
+    cat.default.pos = "outer",
+    cat.pos = c(-27, 27),
+    cat.dist = c(0.055, 0.055),
+    cat.fontfamily = "serif",
+    hyper.test = T,
+    total.population = 20000, 
+    lower.tail = F
+  )
+  
+  venn <- image_read(file.name)
+  venn <- image_annotate(venn, "Assumed a total of 20000 genes", size = 50, gravity = "southeast")
+  image_write(venn, file.name)
+}
+
+
+
+list <- c("naive", "memory", "pbl", "spleen")
+# tct : tissue cell type
+lapply(list, function(tct){
+  
+  strains <- c("B6", "NZO")
+  sapply(strains, function(strain){
+    genes_rna  <- read.csv(paste0("output/Regulated Gene Lists/RNAseq/RNAseq_",
+                                  tct,"_Age18vs3_",strain,"_genelist.csv"),
+                           stringsAsFactors = F)
+    genes_atac <- read.csv(paste0("output/Regulated Gene Lists/ATACseq/ATACseq_",
+                                  tct,"_Age18vs3_",strain,"_genelist.csv"),
+                           stringsAsFactors = F)
+    
+    # filter first to have significant genes only
+    genes_atac <- genes_atac[genes_atac$adj.P.Val < 0.05,]
+    genes_rna  <- genes_rna [genes_rna$adj.P.Val  < 0.05,]
+  
+    # seperate up/down
+    genes_atac_up <- genes_atac[genes_atac$logFC > 0,]$Nearest.Ensembl
+    genes_atac_dw <- genes_atac[genes_atac$logFC < 0,]$Nearest.Ensembl
+    
+    genes_rna_up <- genes_rna[genes_rna$logFC > 0,]$Gene.Name
+    genes_rna_dw <- genes_rna[genes_rna$logFC < 0,]$Gene.Name
+  
+    file.name <- paste0('output/F3/RNA_ATAC_gene_venn/',tct,"_",strain,'_up_regulated_genes.png')
+    venn.overlap(genes_atac_up, genes_rna_up, file.name)
+    file.name <- paste0('output/F3/RNA_ATAC_gene_venn/',tct,"_",strain,'_down_regulated_genes.png')
+    venn.overlap(genes_atac_dw, genes_rna_dw, file.name)  
+  })
+    
+})
+```
+
+```{r}
+bed_to_homer <-function(bed, filename = NULL){
+    
+  options(scipen=999) # prevent scientific notation because it may cause problems.
+  meta <- bed [,c(1:3)]
+  if (nrow(meta) <= 0) {
+      stop("Couldn't parse bed file!")
+  }
+  if (length(grep("[A-Za-z]", meta[,1])) == 0 ){ #check if includes chr
+    meta[,1] <- paste0("chr", meta[,1]) 
+  }
+  chrList  <- list()
+  uniqueID <- list()
+  counter  <- 0 
+  for (col in as.character((unlist(meta[,1])))){
+    
+    if (is.null(chrList[[(col)]])){
+      chrList[[(col)]] <- 1
+    } else {
+      chrList[[(col)]] <- chrList[[col]] + 1
+    }
+    counter <- counter + 1
+    uniqueID[[counter]] <- chrList[[(col)]]
+  }
+  
+  tbl <- meta %>% mutate(Strand = ".", UniqueID=paste0(Chr, "-", uniqueID %>% unlist)) %>% 
+    dplyr::select(UniqueID, everything())
+    if (!is.null(filename)){
+        write.table(x = tbl, file = filename,
+              sep = "\t", row.names = FALSE,quote= FALSE, col.names = TRUE)
+    }
+  options(scipen=0)
+  return(tbl)
+}
+```
+
+```{r}
+preprocess_data_atac <- function(tissue_cell_type, exp_type="ATAC"){
+
+  # Load Homer Annotated Table  
+  filename <- paste0('data/ATACseq/F3_input/atacseq_', tissue_cell_type,'_annotated.txt')
+  homer_table <- read.csv(filename, sep = "\t")
+  colnames(homer_table)[1] <- "UniqueID"
+  cat(paste0("Homer annotated table for ", toupper(tissue_cell_type), " is loaded.\n"))
+  
+  load (paste0("./data/ATACseq/F3_input/Consensus Peaks/atac_seq_consensus_",tissue_cell_type,'.RData'))
+  cat  (paste0("ATACseq bed file for ", toupper(tissue_cell_type), " is loaded.\n"))
+  
+  # Careful: you need to create meta files before you extract X&Y chromosomes!
+  # Since homer annotations are created from whole consensus peak files, they wont have matching uniqueIDs
+  # if meta files are created after removing the X&Y chromosomes.
+  meta  <- bed_to_homer(bed)
+  
+  # Set bed rownames to Unique ID so you won't be confused later
+  rownames(bed) <- meta$UniqueID
+  
+  #remove chrX and chrY 
+  bed   <- bed [bed [,"Chr"] != "chrX"  & bed  [,"Chr"] != "chrY",] 
+  meta  <- meta[meta[,"Chr"] != "chrX"  & meta [,"Chr"] != "chrY",]
+  bed   <- subset(bed, select=-c(Chr, Start, End))
+  
+  # Filter low-expressed peaks
+  # Keep the peak that have Count-Per-Million more than k = 1 in n = 2 samples
+  # It is pretty similar to filterByExpr(y, min.count = 0.5) but its choice of n is different.
+  bed.filtered <- bed [rowSums(cpm(bed) >= 1) >= 2,]
+
+  # normalize with cpm
+  bed.normalized <- cpm(bed.filtered, log = T)
+  
+  sample_atac <- colnames(bed) %>% strsplit("-")
+  STRAIN = TYPE <- sapply(sample_atac, function(x){
+    x[1]
+  })
+  
+  AGE    <- sapply(sample_atac, function(x){
+    as.numeric(gsub("([0-9]+).*$", "\\1", x[2] %>% trimws)) 
+  }) 
+  
+  GENDER <- sapply(sample_atac, function(x){
+    x[3]
+  }) 
+  
+  TISSUE <- sapply(sample_atac, function(x){
+    x[4]
+  }) 
+  
+  SAMPLEMOUSEID <- sapply(sample_atac, function(x){
+    x[5]
+  }) 
+  
+  specs = NULL
+  specs$STRAIN <- STRAIN
+  specs$TYPE   <- TYPE
+  specs$AGE    <- AGE
+  specs$GENDER <- GENDER 
+  specs$TISSUE <- TISSUE
+  specs$SAMPLEMOUSEID <- SAMPLEMOUSEID
+  result <- list(bed=bed, bed.normalized = bed.normalized, 
+                 meta=meta, specs=specs, homer_table = homer_table)
+  return (result)
+}
+```
+
+```{r preprocess-data}
+preprocess_data_rna <- function(tissue_cell_type){
+    
+    cat  (paste0("Loading RNAseq data for: ", toupper(tissue_cell_type), "\n"))
+    name <- load (paste0("./data/RNAseq/F3_input/rnaseq-expcount-",tissue_cell_type,'.RData'))
+    count.matrix <- get(name)
+    count.matrix <- count.matrix[,-1]
+    
+    # Enforce all counts to be integers
+    count.matrix <- round(count.matrix, 0)
+    
+    # Filter low-expressed genes
+    # Keep the genes that have Count-Per-Million more than k = 0.5 in n = 1 samples
+    # It is pretty similar to filterByExpr(y, min.count = 0.5) but its choice of n is different.
+    count.matrix.filtered <- count.matrix [rowSums(cpm(count.matrix) >= 0.5) >= 2,]
+  
+    # normalize with cpm
+    count.matrix.normalized <- cpm(count.matrix.filtered, log = T)
+    
+    sample_rna <- colnames(count.matrix) %>% strsplit(".", fixed = T)
+    
+    STRAIN = TYPE <- sapply(sample_rna, function(x){
+      x[1]
+    })
+    
+    AGE    <- sapply(sample_rna, function(x){
+      as.numeric(gsub("([0-9]+).*$", "\\1", x[2] %>% trimws)) 
+    }) 
+    
+    GENDER <- sapply(sample_rna, function(x){
+      x[3]
+    }) 
+    
+    TISSUE <- sapply(sample_rna, function(x){
+      x[4]
+    }) 
+    
+    SAMPLEMOUSEID <- sapply(sample_rna, function(x){
+      x[5]
+    }) 
+    
+    specs = NULL
+    specs$STRAIN <- STRAIN
+    specs$TYPE   <- TYPE
+    specs$AGE    <- AGE
+    specs$GENDER <- GENDER 
+    specs$TISSUE <- TISSUE
+    specs$SAMPLEMOUSEID <- SAMPLEMOUSEID
+    
+    result <- list(count.matrix= count.matrix, count.matrix.normalized = count.matrix.normalized, specs=specs)
+    return (result)
+}
+```
+
+
+```{r load RNA-ATAC data}
+lapply(c("spleen", "pbl"), function(tct){
+  lapply(c("B6", "NZO"), function(strain){
+    
+    rna.data <- preprocess_data_rna(tct)
+    atac.data <- preprocess_data_atac(tct)
+    
+    geneset <- selected_genesets_mice$vp2008
+    geneset.names <- selected_genesets_labels$vp2008
+    
+    geneset <- merge(geneset, geneset.names, by = "Module.ID", all.x = T)
+    
+    gene.infl.ensembl <- geneset[geneset$Module.Name == "Inflammation I",]$Gene.stable.ID
+    
+    rna <- read_excel("Supplementary/Summary Tables/RNAseq_DE_genes.xlsx", 
+                      sheet = paste0(toupper(tct),"_Age18vs3_", strain))
+    
+    colnames(rna)[2] <- "Gene"
+    
+    atac <- read_excel("Supplementary/Summary Tables/ATACseq_DE_genes.xlsx", 
+                       sheet = paste0(toupper(tct),"_Age18vs3_", strain))
+    
+    rna.inf.genes <- rna[rna$Gene %in% gene.infl.ensembl,]
+    atac.inf.genes <- atac[atac$Nearest.Ensembl %in% gene.infl.ensembl,]
+    
+    common.inf.genes <- rna.inf.genes$Gene[rna.inf.genes$Gene %in% atac.inf.genes$Nearest.Ensembl]
+    
+    rownames(rna.inf.genes) <- rna.inf.genes$Gene
+    rownames(atac.inf.genes) <- atac.inf.genes$Nearest.Ensembl
+    
+    cat(atac.inf.genes[common.genes.inf,]$Gene.Name)
+    plot(rna.inf.genes[common.genes.inf,]$logFC,
+         atac.inf.genes[common.genes.inf,]$logFC, 
+         xlab = "RNAseq DE Genes FC", ylab = "ATACseq DE Peaks FC", main = paste(strain, "_", tct))
+  })
+})
+
+# No significant correlation but RNA and ATAC overlaps are Il1b and fos2l
+```
+
+```{r GSEA RNA/ATAC same direction gene/peak merged}
+load("data/genesets/Wikipathways/Wiki_inflammation.rda")
+load("data/genesets/selected_genesets.Rdata")
+
+source("code/color_values.R")
+
+wp <- selected_genesets_mice$wp
+wp.label <- selected_genesets_labels$wp
+
+wp <- merge(wp, wp.label, by = "Module.ID")
+
+wp.inflammation.ensembl <- wp[wp$Module.ID %in% wp.inflammation$Module.ID, ]
+
+wp.inflammation.ensembl <- split(wp.inflammation.ensembl$Gene.stable.ID, wp.inflammation.ensembl$Module.Name) 
+
+
+strains <- c("B6", "NZO")
+tissues <- c("PBL", "SPLEEN")
+
+# x <- "B6"; y <- "MEMORY"
+
+plot.list <- lapply(strains, function(x) {
+  p <- lapply(tissues, function(y) {
+    atc.data <-
+      read.csv(
+        paste0(
+          "output/F3/DE Genes/All Genes/",
+          y,
+          "_Age18vs3_",
+          x,
+          "ATACseq.csv"
+        )
+      )
+    rna.data <-
+      read.csv(
+        paste0(
+          "output/F3/DE Genes/All Genes/",
+          y,
+          "_Age18vs3_",
+          x,
+          "_RNAseq.csv"
+        )
+      )
+    
+    
+    atc.data <- atc.data %>% arrange(abs(Distance.to.TSS)) 
+    
+    atc.data <- atc.data[!duplicated(atc.data$Nearest.Ensembl),]
+    
+    plot.df <-
+      merge(atc.data[, c("Nearest.Ensembl", "Gene.Name", "logFC", "adj.P.Val")], 
+            rna.data[, c("X", "logFC", "adj.P.Val")],
+            by.x = "Nearest.Ensembl", by.y = "X")
+    
+    plot.df.filtered <- 
+    plot.df[((abs(plot.df$logFC.x) > 1) & (plot.df$adj.P.Val.x < 0.05)) |
+            ((abs(plot.df$logFC.y) > 1) & (plot.df$adj.P.Val.y < 0.05)),]
+    
+    plot.df.filtered <- 
+    plot.df.filtered[sign(plot.df.filtered$logFC.x) == sign(plot.df.filtered$logFC.y),]
+    
+    
+    up.reg <- plot.df.filtered[plot.df.filtered$logFC.x > 0,]
+    dw.reg <- plot.df.filtered[plot.df.filtered$logFC.x < 0,]
+    
+    res.up <- cinaR::HPEA(genes = up.reg$Nearest.Ensembl, 
+                          geneset = selected_genesets_gsea$vp2008, 
+                          background.genes.size = 20e3)
+    res.dw <- cinaR::HPEA(genes = dw.reg$Nearest.Ensembl, 
+                        geneset = selected_genesets_gsea$vp2008, 
+                        background.genes.size = 20e3)
+    
+    return(rbind( cbind(res.up, status = "up"), 
+                  cbind(res.dw, status = "down")))
+    
+  })
+  names(p) <- tissues
+  return(p)
+})
+
+names(plot.list) <- strains
+
+a <- lapply(plot.list, function(x){bind_rows(x, .id = "TCT")})
+plot.df <- bind_rows(a, .id = "Strain")
+
+# plot.df$TCT <- factor(plot.df$TCT, levels = c("NAIVE", "MEMORY"), labels = c("Naive", "Memory"))
+
+p.same.direction <- 
+  ggplot(plot.df %>% filter(adj.p < 0.25), 
+         aes(TCT, module.name, size = -log(adj.p), color = status)) + 
+  geom_point() + 
+  facet_wrap(~ Strain) + xlab("") + ylab("") +
+  labs(color = "Regulation", size = "-log10(p)") + 
+        theme(axis.text = element_text(color = "black")) +
+  scale_color_manual(values = color_values) +
+  theme_minimal(base_size = 16)
+
+ggsave(filename = "output/F3/DE Genes/Mice_PBL_SPLEEN_same_direction_gene_peaks_enrichments.pdf", 
+       width = 8, height = 5,
+       plot = p.same.direction)
+
+```
+
+

@@ -1,0 +1,483 @@
+---
+title: "Human and mouse TF overlap"
+author: "Lori D Kregar, Ahrim Youn, ..., Duygu Ucar"
+date: "2019-06-17"
+output: workflowr::wflow_html
+editor_options:
+  chunk_output_type: console
+---
+
+# Prepare the environment
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache=TRUE)
+knitr::opts_chunk$set(autodep = TRUE)
+
+opts_knit$set(root.dir = "/Users/karako/Dropbox (JAX)/MouseAging_clean/") #set root dir!
+```
+
+```{r libraries, echo=TRUE, include=FALSE}
+library(ComplexHeatmap, quietly = TRUE)
+library(circlize, quietly = TRUE)
+library(graph, quietly = TRUE)
+library(RBGL, quietly = TRUE)
+library(Vennerable, quietly = TRUE)
+library(dplyr, quietly = TRUE)
+library(ggplot2)
+color_values <- source("code/color_values.R")
+```
+
+```{r useful_functions, include=TRUE, echo=TRUE}
+
+put_plots_to_pdf <- TRUE
+
+source("code/TF_pfm_extension_functions.R")
+
+extract_peaktype_per_age_or_gender <- function(df_per_tissue, age_or_gender, thresh){
+  #df_per_tissue <- mouse_peaks_per_tissue[["opening"]][[1]]
+  only_FC <- only_relevant_cols(df_per_tissue, "FC")
+  only_P <- only_relevant_cols(df_per_tissue, "p value")
+  
+  only_sig <- keep_only_significant_FC_pv(only_FC, only_P, age_or_gender, thresh)
+  return(only_sig)
+}
+
+
+names_from_mice <- function(x){
+  tfs <- x[[1]][["Transcription factor"]]
+  tfs_clean <- sapply(tfs, function(y){
+    return(substr(y, 8, nchar(y)))
+  })
+  return(tfs_clean)
+}
+
+mouse_filter_peaktype_age <- function(df_from_xlsx, peaktype, age, log_p_limit){
+  peaks_per_tissue <- lapply(df_from_xlsx[[peaktype]], 
+                                      extract_peaktype_per_age_or_gender,
+                                      age_or_gender = age, thresh = log_p_limit)
+  
+  only_names_opening_mice_old_per_tissue <- lapply(peaks_per_tissue, names_from_mice)
+  
+}
+
+human_filter_peaktype_age <- function(df_like_in_xlsx, peaktype, age, log_p_limit){
+  peaktype_human <- extract_peaktype_per_age_or_gender(df_like_in_xlsx[[peaktype]][[1]],
+                                                    age_or_gender = age,
+                                                    thresh = log_p_limit)
+  
+  only_names_human <- sapply(peaktype_human[[1]][["Transcription factor"]],
+                                   function(x){
+                                     return(substr(x, 8, nchar(x)))
+                                   })
+  return(only_names_human)
+}
+
+replicate_into_list <- function(df, times, df_name){
+  new_list <- vector("list", times)
+  for(i in 1:times){
+    new_list[[i]] <- df
+  }
+  names(new_list) <- rep(df_name, times)
+  return(new_list)
+}
+
+
+```
+
+```{r load_data, echo=TRUE, include=TRUE}
+
+log_p_value_treshold <- -log(0.05)
+
+load("data/mouse_aging_footprint/mouse_TF_FC_p_xlsx.Rdata")
+mouse_peaks_per_tissue <- list_of_peaks_per_tissue
+
+load("data/human_aging_footprint/human_TF_FC_p_xslx.Rdata")
+human_peaks <- opening_closing_human
+
+```
+
+# Opening peaks
+
+```{r preprocess_opening, echo=TRUE, include=TRUE}
+# opening_mice_old 
+opening_mice_old <- mouse_filter_peaktype_age(mouse_peaks_per_tissue,
+                                              "opening", 
+                                              "18mo", 
+                                              log_p_value_treshold)
+# opening_human_old 
+opening_old_human <- human_filter_peaktype_age(human_peaks, 
+                                               "opening", 
+                                               " O", 
+                                               log_p_value_treshold)
+
+
+
+human_opening_PBMC <- replicate_into_list(opening_old_human, length(opening_mice_old), "PBMC")
+
+# REPLACE JUNFOS BY FOSJUN in mice
+only_names_opening_mice_old <- lapply(opening_mice_old, 
+                                      function(x){
+                                        x[(x == "JUNFOS")] <- "FOSJUN"
+                                        return(x)
+                                      })
+
+# draw Venn diagrams per tissue
+
+if(put_plots_to_pdf){
+  pdf(file = "output/F5/overlap/opening_human_mice_overlap.pdf")  
+}
+for(i in 1:length(only_names_opening_mice_old)){
+  groups <- c(names(human_opening_PBMC)[i], names(only_names_opening_mice_old)[i])
+  
+  sets <- list(human_opening_PBMC[[i]], only_names_opening_mice_old[[i]])
+  
+  sets_clean <- lapply(sets, function(x){
+    return(unique(toupper(x)))
+  })
+  names(sets_clean) <- groups
+  
+  # print("##############################")
+  # print(setdiff(sets_clean[[1]], sets_clean[[2]]))
+  # print("###")
+  # print(intersect(sets_clean[[1]], sets_clean[[2]]))
+  # print("###")
+  # print(setdiff(sets_clean[[2]], sets_clean[[1]]))
+  # 
+  venn.alpha <- Venn(Sets = sets_clean)
+  # gp.alpha <- compute.Venn(venn.alpha)
+  # gp.a <- VennThemes(gp.alpha)
+  
+  #plot(venn.alpha)
+  #plot(gp.a)
+  
+  names_in_intersect <- paste0("Intersect: ", paste0(sort(intersect(sets_clean[[1]], sets_clean[[2]])),  
+                               #sep = "", 
+                               collapse = ", "))
+  
+  gridExtra::grid.arrange(grid::grid.grabExpr(plot(venn.alpha, show=list(Universe=FALSE))),
+                          top=textGrob(paste0("Opening peaks in old, log p threshold: ", 
+                                              round(log_p_value_treshold, digits = 3)),
+                                       gp=gpar(fontsize=15)),
+                          bottom = textGrob(names_in_intersect, gp=gpar(fontsize=12)))
+}
+if(put_plots_to_pdf){
+  dev.off()
+}
+
+
+opening_sig_mice <- c("RUNX1","RUNX2","RUNX3",
+                      "ATF1","ATF7","CREB1","CREB3","CREM","GMEB2","JDP2","XBP1",
+                      "ELF1","ERF","ETS1","ETV6","FLI1",
+                      "BACH1MAFK","FOS","FOSL1","FOSL2","JUN","JUNB","JUND","JUNFOS","NFE2L2",
+                      "NFKB1","NFKB2","REL","RELA",
+                      "MGA","RFX1","RFX2","RFX5",
+                      "IRF8")
+
+all_opening_mice <- unique(toupper(unlist(only_names_opening_mice_old)))
+all_opening_human <- unique(toupper(unlist(human_opening_PBMC)))
+
+all_opening <- list(mouse = opening_sig_mice,
+                    human = all_opening_human)
+
+venn_opening_all <- Venn(Sets = all_opening)
+gp.alpha <- compute.Venn(venn_opening_all)
+gp_ <- VennThemes(gp.alpha,increasingLineWidth=FALSE)
+
+gp_[["Face"]][["11"]]$fill <- "#c70039" #SET FILL
+gp_[["Face"]][["10"]]$fill <- "#EE7600" #SET FILL
+gp_[["Face"]][["01"]]$fill <- "#FFB00F" #SET FILL
+
+#plot(venn_opening_all)
+
+intersect_opening <- paste0("Intersect: ", paste0(sort(intersect(all_opening[[1]], all_opening[[2]])),
+                               collapse = ", "))
+
+if(put_plots_to_pdf){
+  pdf(file = "output/F5/overlap/opening_human_mice_overlap_all.pdf",
+      width = 5, height = 4)
+}
+
+gridExtra::grid.arrange(grid::grid.grabExpr(plot(venn_opening_all, gp = gp_, show=list(Universe=FALSE))),
+                          top=textGrob(paste0("Opening peaks associated TFs in\naged humans and mice"#,
+                                              #round(log_p_value_treshold, digits = 3)
+                                              ),
+                                       gp=gpar(fontsize=15)),
+                          bottom = textGrob((intersect_opening), gp=gpar(fontsize=12)))
+
+
+if(put_plots_to_pdf){
+  dev.off()
+}
+
+```
+
+# Closing peaks
+
+```{r closing_young_overlap, include=TRUE, echo=TRUE}
+
+closing_mice_young <- mouse_filter_peaktype_age(mouse_peaks_per_tissue,
+                                              "closing", 
+                                              "3mo", 
+                                              log_p_value_treshold)
+
+only_names_closing_human <- human_filter_peaktype_age(human_peaks,
+                                                      "closing",
+                                                      " Y",
+                                                      log_p_value_treshold)
+  
+  
+human_closing_PBMC <- replicate_into_list(only_names_closing_human, 
+                                          length(closing_mice_young), "PBMC")
+
+# draw Venn
+if(put_plots_to_pdf){
+  pdf(file = "output/F5/overlap/closing_human_mice_overlap.pdf")
+}
+for(i in 1:length(closing_mice_young)){
+  groups <- c(names(human_closing_PBMC)[i], names(closing_mice_young)[i])
+  
+  sets <- list(human_closing_PBMC[[i]], closing_mice_young[[i]])
+  
+  sets_clean <- lapply(sets, function(x){
+    return(unique(toupper(x)))
+  })
+  names(sets_clean) <- groups
+  
+  
+  venn.alpha <- Venn(Sets = sets_clean)
+  # gp.alpha <- compute.Venn(venn.alpha)
+  # gp.a <- VennThemes(gp.alpha)
+  names_formatted <- paste0("Intersect: ", paste0(sort(intersect(sets_clean[[1]], sets_clean[[2]])), 
+                                          collapse = ", "))
+  
+  gridExtra::grid.arrange(grid::grid.grabExpr(plot(venn.alpha, show=list(Universe=FALSE))), 
+                          top=textGrob(paste0("Closing peaks in young, log p value threshold: ", round(log_p_value_treshold, digits = 3)),
+                                       gp=gpar(fontsize=15)),
+                          bottom = textGrob(names_formatted, gp=gpar(fontsize=10)))
+}
+if(put_plots_to_pdf){
+  dev.off()
+}
+
+
+all_closing_human <- unique(toupper(unlist(human_closing_PBMC)))
+all_closing_mice <- unique(toupper(unlist(closing_mice_young)))
+
+intersect_closing <- intersect(all_closing_human, all_closing_mice)
+
+intersect_human_close_mouse_open <- sort(intersect(all_closing_human, all_opening$mouse))
+
+```
+
+```{r intersect_venn_closing, include=TRUE, echo=TRUE}
+
+# opening_mice_old 
+closing_mice_old <- mouse_filter_peaktype_age(mouse_peaks_per_tissue,
+                                              "closing", 
+                                              "3mo", 
+                                              log_p_value_treshold)
+# opening_human_old 
+closing_old_human <- human_filter_peaktype_age(human_peaks, 
+                                               "closing", 
+                                               " Y", 
+                                               log_p_value_treshold)
+
+combined_closing_mice <- unique(toupper(unlist(closing_mice_old)))
+combined_closing_human <- unique(toupper(unlist(closing_old_human)))
+
+overlap_combined_closing <- list(mouse = combined_closing_mice,
+                                 human = combined_closing_human)
+
+
+venn_closing_all <- Venn(Sets = overlap_combined_closing)
+gp.alpha_closing <- compute.Venn(venn_closing_all)
+gp_cl <- VennThemes(gp.alpha_closing,increasingLineWidth=FALSE)
+
+gp_cl[["Face"]][["11"]]$fill <- "#386FA4" #SET FILL
+gp_cl[["Face"]][["10"]]$fill <- "#84D2F6" #SET FILL
+gp_cl[["Face"]][["01"]]$fill <- "#59A5D8" #SET FILL
+
+#plot(venn_opening_all)
+
+intersect_closing <- paste0("Intersect: ", paste0(sort(intersect(overlap_combined_closing[[1]],
+                                                                 overlap_combined_closing[[2]])),
+                               collapse = ", "))
+
+if(put_plots_to_pdf){
+  pdf(file = "output/F5/overlap/closing_human_mice_overlap_all.pdf",
+      width = 5, height = 4)
+}
+
+gridExtra::grid.arrange(grid::grid.grabExpr(plot(venn_closing_all, 
+                                                 gp = gp_cl, show=list(Universe=FALSE))),
+                          top=textGrob(paste0("Closing peaks associated TFs in\naged humans and mice"#,
+                                              #round(log_p_value_treshold, digits = 3)
+                                              ),
+                                       gp=gpar(fontsize=15)),
+                          bottom = textGrob((introduce_new_line_to_rownames(intersect_closing)), gp=gpar(fontsize=12)))
+
+
+if(put_plots_to_pdf){
+  dev.off()
+}
+```
+
+
+```{r}
+read_excel_allsheets <- function(filename, tibble = FALSE) {
+    # I prefer straight data.frames
+    # but if you like tidyverse tibbles (the default with read_excel)
+    # then just pass tibble = TRUE
+    sheets <- readxl::excel_sheets(filename)
+    x <- lapply(sheets, function(X) readxl::read_excel(filename, sheet = X))
+    if(!tibble) x <- lapply(x, as.data.frame)
+    names(x) <- sheets
+    x
+}
+
+# Define common tfs across species
+common.tfs <- c("FOS", "FOSL2", "JDP2", "JUNB", "JUND", "NFE2L2")
+
+mouse <- read_excel_allsheets("output/F5/mouse/opening_transcription_factors_FC_p_mouse.xlsx")
+human <- read_excel("output/F5/human/opening_transcription_factors_FC_p_human.xlsx")
+
+#iterate over tissue/cell type
+plot.tfs.mice <- lapply(mouse, function(tct){
+  tfs <- tct[(tct$name %in% common.tfs),]
+  fc.b6 <- tfs$`FC B6 18mo`
+  fc.nzo<- tfs$`FC NZO 18mo`
+  res <- cbind(fc.b6, fc.nzo)
+  rownames(res) <- tfs$name
+  return(res)
+}) %>% do.call(cbind, .)
+
+idx.b6 <- seq(1,ncol(plot.tfs.mice), by = 2)
+idx.nzo<- seq(2,ncol(plot.tfs.mice), by = 2)
+
+df.tf.b6 <- plot.tfs.mice[,idx.b6]
+df.tf.nzo<- plot.tfs.mice[,idx.nzo]
+
+df.tf.b6 <- df.tf.b6[!duplicated(rownames(df.tf.b6)),]
+df.tf.nzo<- df.tf.nzo[!duplicated(rownames(df.tf.nzo)),]
+
+colnames(df.tf.b6) <- colnames(df.tf.nzo) <- names(mouse)
+
+breaksList = seq(-5, 5, by = .001)
+pheatmap(cbind(df.tf.b6, df.tf.nzo), 
+         cluster_rows = F, cluster_cols = F, border_color = "white", 
+         color = colorRampPalette((brewer.pal(n = 9, name = "Reds")))(length(breaksList)))
+
+plot.tfs.human <- cbind(human[human$name %in% common.tfs,]$`FC F O`,
+                        human[human$name %in% common.tfs,]$`FC M O`)
+
+plot.tfs.human <- plot.tfs.human[!duplicated(rownames(plot.tfs.human)),]
+
+rownames(plot.tfs.human) <- human$name[human$name %in% common.tfs]
+colnames(plot.tfs.human) <- c("Female", "Male")
+
+df.plot.tf <- cbind(plot.tfs.human, df.tf.b6, df.tf.nzo)
+
+anno.col <- data.frame(Strain = c(rep(NA,2), rep("B6", 4), rep("NZO", 4)))
+
+rownames(anno.col) <- colnames(df.plot.tf)
+
+pdf("output/F5/overlap/human_mice_opening_heatmap.pdf", useDingbats = F, width = 6, height = 3)
+breaksList = seq(-5, 5, by = .001)
+pheatmap(df.plot.tf,
+         cluster_rows = F, cluster_cols = F, border_color = "white", 
+         color = colorRampPalette((brewer.pal(n = 9, name = "Reds")))
+         (length(breaksList)), gaps_col = c(2,6))
+
+dev.off()
+```
+
+```{r, shared TFs human&mice expressions FC}
+common.tfs <- c("FOS", "FOSL2", "JDP2", "JUNB", "JUND", "NFE2L2")
+common.tfs.ensembl <- c('ENSMUSG00000021250', 'ENSMUSG00000029135', 'ENSMUSG00000034271', 
+                       'ENSMUSG00000052837', 'ENSMUSG00000071076', 'ENSMUSG00000015839')
+
+names(common.tfs.ensembl) <- common.tfs
+
+mouse.files <- list.files("output/F3/DE Genes/All Genes/")
+
+mouse.de.genes <- lapply(mouse.files, function(x){
+  read.csv(file = paste0("output/F3/DE Genes/All Genes/", x))
+})
+
+names(mouse.de.genes) <- mouse.files
+
+mouse.de.genes <- dplyr::bind_rows(mouse.de.genes, .id = "TCT")
+
+mouse.de.genes$Strain <- sapply(mouse.de.genes$TCT, function(x){
+  strsplit(x,  "_", fixed = TRUE)[[1]][3]
+})
+mouse.de.genes$TCT <- sapply(mouse.de.genes$TCT, function(x){
+  strsplit(x,  "_", fixed = TRUE)[[1]][1]
+})
+
+colnames(mouse.de.genes)[2] <- "Gene.Ensembl"
+
+mouse.de.genes.filtered <- mouse.de.genes[mouse.de.genes[,2] %in% common.tfs.ensembl,]
+
+mouse.de.genes.filtered <- mouse.de.genes.filtered %>% arrange(Strain, TCT, Gene.Ensembl)
+
+pheatmap.values <- matrix(mouse.de.genes.filtered$logFC, nrow = length(unique(mouse.de.genes.filtered$Gene.Ensembl)))
+
+rownames(pheatmap.values) <- names(sort(common.tfs.ensembl))
+colnames(pheatmap.values) <- rep(unique(mouse.de.genes.filtered$TCT),2)
+
+######### Add human counterparts
+rna.de.genes <- read_excel("data/RNAseq/human/RNAseq_DE_eladio.xlsx")
+
+
+rna.de.genes <- rna.de.genes[rna.de.genes$Contrast == "HOxHY",]
+
+rna.de.genes.m <- rna.de.genes %>% filter(Sex == "Males")
+rna.de.genes.f <- rna.de.genes %>% filter(Sex == "Females")
+
+  
+# Load Biomart DB 
+# Notice that this database is for human, to see different DBs:
+# mart = useMart("ensembl"); listDatasets(mart)
+mart <- useMart("ensembl", 
+                host = "useast.ensembl.org",
+                dataset = "hsapiens_gene_ensembl")
+
+ensembl2geneID <- function(x) {
+  # Get the mapping matrix for ensembl_gene_id to hgnc_symbol!
+  mapping <- getBM(mart = mart, 
+                 useCache = T, uniqueRows = T,
+                 filters = "ensembl_gene_id",
+                 values = x$EnsemblID,
+                 attributes = c("ensembl_gene_id","hgnc_symbol"))
+  a<-duplicated(mapping)
+  mapping <- mapping[!a,]
+  y <- merge(x, mapping, by.x = "EnsemblID", by.y = "ensembl_gene_id", all.x = T, sort = F)
+  return (y)
+}
+
+rna.de.genes.m <- ensembl2geneID(rna.de.genes.m)
+rna.de.genes.f <- ensembl2geneID(rna.de.genes.f)
+
+
+pheatmap.values <- cbind(
+  rna.de.genes.f[ match( names(sort(common.tfs.ensembl)),rna.de.genes.f$hgnc_symbol),]$logFC,
+  rna.de.genes.m[ match( names(sort(common.tfs.ensembl)),rna.de.genes.m$hgnc_symbol),]$logFC,
+  pheatmap.values)
+
+colnames(pheatmap.values)[c(1,2)] <- c("Female", "Male")
+breaksList = seq(-5, 5, by = .001)
+pdf("output/F5/human_mice_RNAseq_FC_common_TFs.pdf", usingDingbats = F, 
+    width = 5, height = 3)
+
+pheatmap(pheatmap.values,
+         cluster_rows = F, cluster_cols = F, border_color = "white", 
+         color = colorRampPalette((brewer.pal(n = 9, name = "Reds")))(length(breaksList)),
+         # color = viridis(10),
+         gaps_col = c(2,6))
+dev.off()
+```
+
+
+
+

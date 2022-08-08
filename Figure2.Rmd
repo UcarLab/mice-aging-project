@@ -1,0 +1,1177 @@
+---
+title: "Cell composition - supplementary"
+author: "E Onur Karakaslar, Lori D Kregar, Ahrim Youn, ..., Duygu Ucar"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: workflowr::wflow_html
+editor_options:
+  chunk_output_type: console
+---
+# Prepare the environment
+
+```{r libraries, include=TRUE, echo=F}
+library(dplyr)
+library(readxl)
+library(glmnet)
+library(ggpubr)
+library(ggplot2)
+library(writexl)
+library(pheatmap)
+library(circlize)
+library(reshape2)
+library(DescTools)
+library(patchwork)
+library(colorspace)
+library(ComplexHeatmap)
+
+require(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+opts_knit$set(root.dir = "/Users/karako/Dropbox (JAX)/MouseAging_clean/NatureAgingSubmission/") #set root dir!
+```
+
+```{r import, echo=TRUE, include=TRUE}
+source("code/library_function_wf_flow.r")
+source("code/PVCA_wf.r")
+load("data/flow/flow_data_table.Rdata")
+
+color.palette <- paletteer::paletteer_d("ggsci::nrc_npg")
+
+plots_in_pdf <<- TRUE
+
+q_value_cutoff <- 0.05
+```
+
+```{r flow_raw_table, include=TRUE, echo=TRUE}
+
+#### Ahrim's Data #####
+
+# # to spleen
+# flow[flow=="SPL"]="spleen"
+# 
+# # convert weeks to months
+# flow[,4]=round(as.numeric(flow[,4])*7/30)
+# flow[flow[,4]==13,4]=12
+# flow[flow[,4]==17,4]=18
+# 
+# # remove bone marrow
+# flow=flow[flow[,"tissue"]!="BM",]
+
+#### Onur Data ####
+flow <- read_excel("data/flow/raw/Flow_Data_Merged_v2.xlsx")
+flow[flow=="SPL"]="spleen"
+flow[,"Age"] <- round((flow[,"Age"]) * 7/30)
+flow[flow[,"Age"] == 13, "Age"]=12
+flow[flow[,"Age"] == 17, "Age"]=18
+
+meta <- flow [,1:4] # Tissue, Strain, Sex, Age
+
+flow <- flow %>% as.matrix
+meta <- meta %>% as.matrix
+
+colnames(flow)[colnames(flow)=="Strain"] ="type"
+
+write_xlsx(data.frame(flow), path = "output/F2/raw_data_flow_cell_percentages.xlsx",
+           col_names = TRUE)
+```
+
+
+# Supplementary figure 1: changes in PBL and spleen
+
+```{r percentage_plots_suplementary, include=TRUE, echo=TRUE}
+
+# change colnames
+colnames(flow)[colnames(flow)=="B.Viable"]="B"
+colnames(flow)[colnames(flow)=="CD4.Viable"]="CD4"
+colnames(flow)[colnames(flow)=="CD8.Viable"]="CD8"
+
+### get rid of problematic middle age samples
+flow <- flow[flow[,"Age"]!=6 ,]
+
+### get rid of CD38 and percentage of viable cells ###
+# colnames(flow)[c(9:11,31:41,53:56)]
+
+# [1] "B.Lymphocytes"                                                        "CD4.Lymphocytes"                                                     
+#  [3] "CD8.Lymphocytes"                                                      "CD38.B"                                                              
+#  [5] "CD38.CD4"                                                             "CD38.CD8"                                                            
+#  [7] "CD38.CD4.Naive"                                                       "CD38.CD4.CM"                                                         
+#  [9] "CD38.CD4.EM"                                                          "CD38.CD4.EMRA"                                                       
+# [11] "CD38.CD8.Naive"                                                       "CD38.CD8.CM"                                                         
+# [13] "CD38.CD8.EM"                                                          "CD38.CD8.EMRA"                                                       
+# [15] "X..Viable"                                                            "Single.Cells.Viable.Cells.Granulocytes.Fre.Viable.Cells"             
+# [17] "Single.Cells.Viable.Cells.No.Granulocytes.Monocytes.Fre.Parent"       "Single.Cells.Viable.Cells.No.Granulocytes.Monocytes.Fre.Viable.Cells"
+
+# Remove unnecessary cell proportions
+flow <- flow[,-c(9:11,31:41,53:56)]
+meta <- flow[,1:5]
+
+meta.types <- colnames(meta)
+cell.types <- colnames(flow[,6:ncol(flow)])
+
+colnames(meta) <- c("TISSUE","STRAIN","GENDER","AGE","SAMPLEID")
+
+dat <- as.matrix(flow[,cell.types])
+dat <- matrix(as.numeric(dat),nrow = nrow(dat),ncol = ncol(dat))
+
+colnames(dat) <- cell.types
+
+# PCA and PVCA
+# res=PVCA(t(dat[rowSums(is.na(dat))==0,]),meta[rowSums(is.na(dat))==0,1:4],0.9)
+# #pdf(file="../results/PVCA_flow.pdf")
+# PlotPVCA(res, "")
+# 
+# # plots prinicpal components for flow data, colored by gender
+# PCA(t(dat[rowSums(is.na(dat))==0,]),meta[rowSums(is.na(dat))==0,1:4])
+
+bed <- t(dat[rowSums(is.na(dat))==0,])
+bed <- bed[-(1:3),]
+meta=meta[rowSums(is.na(dat))==0,]
+
+TISSUE=meta[,1]
+STRAIN=meta[,2]
+GENDER=meta[,3]
+AGE=as.numeric(meta[,4])
+SAMPLEMOUSEID=meta[,5]
+
+###run until here in order to generate the bed files and other information needed for age_prediction.r #############
+
+TRANSFORM=F
+
+dat=as.data.frame(flow)
+
+dat=dat[rowSums(is.na(dat))==0,]
+
+for(i in c(4,6:ncol(dat))) dat[,i]=as.numeric(as.matrix(dat[,i]))
+
+#dim(flow)
+
+# add flow cd4/cd8 ratio
+dat$CD4.CD8.ratio=as.numeric(dat[,"CD4"])/as.numeric(dat[,"CD8"])
+
+# the following doesn't actually remove anything from flow
+dat=dat[!is.na(dat[,2]),]
+
+# keep the original data for later use
+stored_dat <- dat
+
+# draw global plot of cell proportions #
+convert.numeric <- function(x){
+  x[x==3]="03"
+  x[x==6]="06"
+  return(x)
+}
+
+dat0=dat
+dat0$new=paste(convert.numeric(dat0$Age),as.character(dat0$Sample),sep="-")
+dat0$new=(dat0$Age)
+
+# There are few BM samples therefore removed from the analyses.
+dat0=dat0[dat0[,"Tissue"]!="BM",]
+
+stored_dat0 <- dat0
+
+subplot.by.tissue <- function(dat0,subset,title_,seltissue, mouse1 = FALSE){
+  tmp <- cbind("Major",dat0[,c("Tissue","type","Sex","Age",subset ,"new")])
+  names(tmp)[1] <- "category"
+  tmp2 <- cbind("IL7R+", dat0[,c("Tissue","type","Sex","Age",paste("IL7R",subset,sep=".") ,"new")])
+  tmp3 <- cbind("PD1+", dat0[,c("Tissue","type","Sex","Age",paste("PD1",subset,sep=".") ,"new")])
+  names(tmp2) <- names(tmp3) <- names(tmp)
+  tmp_all <- rbind(tmp,tmp2,tmp3)
+  tmp_all <- tmp_all[tmp_all$Tissue==seltissue,]
+  tmp_all$Tissue <- tmp_all$category
+  ggdf <- reshape2::melt(tmp_all,id.vars = c("Tissue","type","Sex","new"),measure.vars=subset)
+  colnames(ggdf)[grep("type", colnames(ggdf))] <- "Strain"
+  
+  ggdf$variable <- fomat_variable_names_cd_cells(ggdf$variable)
+  
+  p1 <- subplot(ggdf,title_, mouse1 = FALSE)
+  return(p1)
+}
+
+
+p1 <- subplot.by.tissue(dat0, c("B","CD4","CD8"),
+                     "% of major cell types in PBL","PBL", mouse1 = FALSE)
+p2 <- subplot.by.tissue(dat0, c("CD4.Naive","CD4.CM","CD4.EM","CD4.EMRA"),
+                     "% of CD4+ T-cells in PBL","PBL", mouse1 = FALSE)
+p3 <- subplot.by.tissue(dat0, c("CD8.Naive","CD8.CM","CD8.EM","CD8.EMRA"),
+                     "% of CD8+ T-cells in PBL","PBL", mouse1 = FALSE)
+p4 <- subplot.by.tissue(dat0, c("B","CD4","CD8"),"% of major cell types in spleen",
+                     "spleen", mouse1 = FALSE)
+p5 <- subplot.by.tissue(dat0, c("CD4.Naive","CD4.CM","CD4.EM","CD4.EMRA"),
+                     "% of CD4+ T-cells in spleen","spleen", mouse1 = FALSE)
+p6 <- subplot.by.tissue(dat0, c("CD8.Naive","CD8.CM","CD8.EM","CD8.EMRA"),
+                     "% of CD8+ T-cells in spleen","spleen", mouse1 = FALSE)
+
+
+# if(plots_in_pdf){
+#   pdf("output/F2/percentage_of_cells_flow_mice_trend_72.pdf",
+#       height = 10, width = 15)
+# }
+# multiplot(p1 + guides(col = FALSE),
+#           p4 + guides(col = FALSE),
+#           p2 + guides(col = FALSE),
+#           p5 + theme(legend.position="bottom", legend.direction="vertical",),
+#           p3 + guides(col = FALSE),
+#           p6 + guides(col = FALSE),
+#           cols=3)
+# if(plots_in_pdf){
+#   dev.off()
+# }
+
+
+# flow_panels_all_separate <- 
+#   {p1 + guides(col = FALSE)} +
+#   {p2 + guides(col = FALSE)} +
+#   {p3 + guides(col = FALSE)} +
+#   {p4 + guides(col = FALSE)} +
+#   {p5 + theme(legend.position="bottom", legend.direction="horizontal")} +
+#   {p6 + guides(col = FALSE)} +
+#   plot_layout(ncol = 3)
+
+flow_panels_all_separate <- 
+  {p1 + theme(legend.position="none")} +
+  {p2 + theme(legend.position="none")} +
+  {p3 + theme(legend.position="none")} +
+  {p4 + theme(legend.position="none")} +
+  {p5 + theme(legend.position="bottom", legend.direction="horizontal")} +
+  {p6 + theme(legend.position="none")} +
+  plot_layout(ncol = 3)
+
+
+if(plots_in_pdf){
+  ggsave("output/F2/flow_panels_all_separate.pdf",
+         plot = flow_panels_all_separate,
+         height = 10,
+         width = 13,
+         units = "in",
+         useDingbats = FALSE)
+  
+  ggsave("output/F2/flow_panels_all_separate.png",
+         plot = flow_panels_all_separate,
+         height = 10,
+         width = 13,
+         units = "in",
+         dpi = 300)
+}else{
+  print(flow_panels_all_separate)
+}
+
+
+```
+
+```{r PIE CHART}
+main.cell.types <- c("B", "CD4", "CD8")
+
+flow.main <- as.data.frame(flow)
+
+flow.main <- apply(flow.main[-c(1:3)],2, as.numeric) %>% as.data.frame
+flow.main <- cbind(flow[,c(1:3)] , flow.main)
+flow.main$Monocytes <- (100 - rowSums(flow.main[,main.cell.types]))
+
+df.pie <- flow.main[,c("Tissue", "type", "Age", main.cell.types, "Monocytes")] %>% 
+  melt (id.vars = c("Tissue", "type", "Age"), variable.name = "cell.type")
+
+library(broom)
+library(tidyverse)
+
+t.test.strain <- df.pie %>% 
+  filter(Age != 12) %>% 
+  group_by(cell.type, Tissue, Age, type) %>% 
+  nest() %>% 
+  spread(key = type, value = data) %>% 
+  mutate(
+      t_test = map2(B6, NZO, ~{t.test(.x$value, .y$value, var.equal = T) %>% tidy()}),
+      B6 = map(B6, nrow),
+      NZO = map(NZO, nrow)
+    ) %>% 
+  unnest(cols = c(B6, NZO, t_test))
+
+
+t.test.tissue <- df.pie %>% 
+  filter(Age != 12) %>% 
+  group_by(cell.type, Tissue, Age, type) %>% 
+  nest() %>% 
+  spread(key = Tissue, value = data) %>% 
+  mutate(
+      t_test = map2(spleen, PBL, ~{t.test(.x$value, .y$value, var.equal = T) %>% tidy()}),
+      spleen = map(spleen, nrow),
+      PBL = map(PBL, nrow)
+    ) %>% 
+  unnest(cols = c(spleen, PBL, t_test))
+
+write_xlsx(list(Tissue_comparison = data.frame(t.test.tissue), 
+                Strain_comparison = data.frame(t.test.strain)), path = "output/F2/t_test_pie_charts.xlsx")
+
+
+
+df.pie.means <- df.pie %>% group_by(cell.type ,Age, type, Tissue) %>% summarize(value = sum(value)/n()) %>% filter(Age != 12)
+
+# df.pie.means %>% group_by(Tissue, cell.type) %>% summarize(value = sum(value)/n())
+
+levels(df.pie.means$Tissue) <- c("PBL", "Spleen")
+
+plot.cell.type.pie <- ggplot(df.pie.means, aes(x =1, y = value, fill = cell.type)) +
+  geom_bar(stat = "identity", width=1, color="white") + 
+  facet_wrap(~ type + Tissue + Age, nrow = 2, strip.position = "bottom") + 
+  coord_polar("y") + theme_void(base_size = 16) + 
+  scale_fill_manual(values = color.palette) + 
+  xlab("") + ylab("") + labs(fill = "Cell Type")
+
+ggsave(plot = plot.cell.type.pie, filename = "output/F2/main_cell_types_pie.pdf", useDingbats = F,
+       width = 7, height = 5)
+
+plot.cell.type.pie.minimal <- plot.cell.type.pie + theme_minimal()
+
+ggsave(plot = plot.cell.type.pie.minimal, 
+       filename = "output/F2/main_cell_types_pie_minimal_theme.pdf", useDingbats = F, 
+       width = 7, height = 5)
+```
+
+
+```{r produce_flow_table, include=TRUE, echo=TRUE}
+
+xls_table <- dat0
+
+colnames(xls_table)[2] <- "strain"
+
+
+colnames(xls_table) <- sapply(colnames(xls_table), function(c_name){
+  #c_name <- colnames(xls_table)[1]
+  first <- toupper(substr(c_name, 1, 1))
+  with_capital <- paste0(first, substr(c_name, 2, nchar(c_name)))
+  return(with_capital)
+})
+
+xls_table$new <- NULL
+
+write_xlsx(xls_table, path = "output/F2/flow_cell_percentages.xlsx",
+           col_names = TRUE)
+
+```
+
+```{r anoter_panel_for_flow_trends, include=TRUE, echo=TRUE}
+
+flow_panels <- dat0
+
+colnames(flow_panels)[6:16] <- paste0("major.", colnames(flow_panels)[6:16])
+
+  
+
+
+
+```
+
+
+```{r extract_major_b6_spleen_cd8cm, include=TRUE, echo=TRUE}
+
+cd8cm <- subplot.by.tissue(dat0, c("CD8.CM"),
+                     "% of major cell types in PBL","PBL", mouse1 = FALSE)
+
+just_major <- as.data.frame(cd8cm$data %>% filter(Tissue == "Major"))
+
+cd8cmplot <- ggplot(just_major, aes(x = new, y = value, group = new, color = Strain)) +
+  geom_bar(width = 6) +
+  geom_jitter(width = 0.1, height = 0.1, na.rm = TRUE, size = 3) +
+  # geom_point() +  
+  facet_wrap(~Strain) + 
+  stat_compare_means(method = "t.test") +
+    theme_pubr() + 
+    theme(axis.text.x = element_text(angle = 90, hjust = 1),
+          plot.title = element_text(hjust = 0.5)) +
+    xlab("") +
+    ylab("") +
+    # ggtitle("CD8+ CM T-cells from\nmajor in PBL") +
+    geom_smooth(method = "lm", se = FALSE,size=1, na.rm = TRUE) +
+    scale_x_continuous(breaks = c(3,18)) +
+    scale_color_manual(values = color_values)
+  cd8cmplot
+ggsave(plot = cd8cmplot,
+       filename = "output/F2/cd8cd_slope.pdf",
+       height = 4, width = 4, useDingbats = FALSE)
+
+ggsave(plot = cd8cmplot,
+       filename = "output/F2/cd8cd_slope.png",
+       height = 4, width = 4, dpi = 300)
+  
+
+```
+
+
+
+
+```{r extract_major_b6_spleen_cd8em, include=TRUE, echo=TRUE}
+cd8em <- subplot.by.tissue(dat0,c("CD8.EM"),"Percentage of CD8+ T-cells in PBL","PBL", mouse1 = FALSE)
+
+just_major <- as.data.frame(cd8em$data %>% filter(Tissue == "Major"))
+
+cd8emplot <- ggplot(just_major, aes(x = new, group =new, y = value, color = Strain)) +
+    geom_boxplot() + 
+    geom_jitter(width = 0.1, height = 0.1, na.rm = TRUE, size = 3) +  
+    theme_pubr(base_size = 15, base_family = "sans") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1),
+          plot.title = element_text(hjust = 0.5)) +
+    xlab("") +
+    ylab("") +
+    ggtitle("CD8+ EM T-cells in PBL") +
+    geom_smooth(method = "lm", se = FALSE,size=1, na.rm = TRUE) +
+    scale_x_continuous(breaks = c(3,12,18)) +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5)) +
+    ylim(c(0,100)) +
+    theme(legend.position = "none") + 
+    scale_color_manual(values = color_values) + 
+  facet_wrap(~ Strain)
+
+
+signif(summary(lm(value ~ new, data= just_major %>%filter(Strain == "NZO")))$coef[2,4],1)
+signif(summary(lm(value ~ new, data= just_major %>%filter(Strain == "B6")))$coef[2,4], 1)
+               
+ggsave(plot = cd8emplot,
+       filename = "output/F2/cd8em_slope.pdf",
+       height = 4, width = 4, useDingbats = FALSE)
+
+ggsave(plot = cd8emplot,
+       filename = "output/F2/cd8em_slope.png",
+       height = 4, width = 4, dpi = 300)
+```
+
+```{r extract_major_b6_spleen_cd8em, include=TRUE, echo=TRUE}
+cd8em <- subplot.by.tissue(dat0,c("CD8.EM"),"Percentage of CD8+ T-cells in spleen","spleen", mouse1 = FALSE)
+
+just_major <- as.data.frame(cd8em$data %>% filter(Tissue == "Major"))
+
+cd8emplot <- ggplot(just_major, aes(x = new, group = new, y = value, color = Strain)) +
+    geom_boxplot(width = 6) + 
+      geom_jitter(width = 0.1, height = 0.1, na.rm = TRUE, size = 3) +  
+    theme_pubr(base_size = 15, base_family = "sans") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1),
+          plot.title = element_text(hjust = 0.5)) +
+    xlab("") +
+    ylab("") +
+    ggtitle("CD8+ EM T-cells in PBL") +
+    geom_smooth(method = "lm", se = FALSE,size=1, na.rm = TRUE) +
+    scale_x_continuous(breaks = c(3,12,18)) +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5)) +
+    ylim(c(0,100)) +
+    theme(legend.position = "none") + 
+    scale_color_manual(values = color_values) + 
+  facet_wrap(~Strain)
+
+
+signif(summary(lm(value ~ new, data= just_major %>%filter(Strain == "NZO")))$coef[2,4],1)
+signif(summary(lm(value ~ new, data= just_major %>%filter(Strain == "B6")))$coef[2,4], 1)
+               
+ggsave(plot = cd8emplot,
+       filename = "output/F2/cd8em_slope_spleen.pdf",
+       height = 4, width = 4, useDingbats = FALSE)
+
+ggsave(plot = cd8emplot,
+       filename = "output/F2/cd8em_slope_spleen.png",
+       height = 4, width = 4, dpi = 300)
+```
+
+
+  
+```{r extract_major_b6_spleen_c4naive, include=TRUE, echo=TRUE}
+cd4naive <- subplot.by.tissue(dat0,c("CD4.Naive"),"Percentage of CD4+ T-cells in PBL","PBL", mouse1 = FALSE)
+
+just_major.naive <- as.data.frame(cd4naive$data %>% filter(Tissue == "Major"))
+
+signif(summary(lm(value ~ new, data= just_major.naive %>%filter(Strain == "NZO")))$coef[2,4],1)
+signif(summary(lm(value ~ new, data= just_major.naive %>%filter(Strain == "B6")))$coef[2,4], 1)
+
+cd4.naive.plot <- ggplot(just_major.naive, aes(x = new, y = value, color = Strain)) +
+    geom_jitter(width = 0.1, height = 0.1, na.rm = TRUE, size = 3) +  
+    theme_pubr(base_size = 15) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1),
+          plot.title = element_text(hjust = 0.5)) +
+    xlab("") +
+    ylab("") +
+    ggtitle("CD4+ Naive T-cells in PBL") +
+    geom_smooth(method = "lm", se = FALSE,size=1, na.rm = TRUE) +
+    scale_x_continuous(breaks = c(3,12,18)) +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5)) +
+    ylim(c(0,100)) + 
+    theme(legend.position = "none") + 
+    scale_color_manual(values = color_values) 
+
+
+ggsave(plot = cd4.naive.plot,
+       filename = "output/F2/cd4naive_slope.pdf",
+       height = 4, width = 4, useDingbats = FALSE)
+
+ggsave(plot = cd4.naive.plot,
+       filename = "output/F2/cd4naive_slope.png",
+       height = 4, width = 4, dpi = 300)
+
+```
+
+```{r extract_major_b6_spleen_c4naive, include=TRUE, echo=TRUE}
+cd4naive <- subplot.by.tissue(dat0,c("CD4.Naive"),"Percentage of CD4+ T-cells in PBL","spleen", mouse1 = FALSE)
+
+just_major.naive <- as.data.frame(cd4naive$data %>% filter(Tissue == "Major"))
+
+signif(summary(lm(value ~ new, data= just_major.naive %>%filter(Strain == "NZO")))$coef[2,4],1)
+signif(summary(lm(value ~ new, data= just_major.naive %>%filter(Strain == "B6")))$coef[2,4], 1)
+
+cd4.naive.plot <- ggplot(just_major.naive, aes(x = new, y = value, color = Strain)) +
+    geom_jitter(width = 0.1, height = 0.1, na.rm = TRUE, size = 3) +  
+    theme_pubr(base_size = 15) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1),
+          plot.title = element_text(hjust = 0.5)) +
+    xlab("") +
+    ylab("") +
+    ggtitle("CD4+ Naive T-cells in Spleen") +
+    geom_smooth(method = "lm", se = FALSE,size=1, na.rm = TRUE) +
+    scale_x_continuous(breaks = c(3,12,18)) +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5)) +
+    ylim(c(0,100)) + 
+    theme(legend.position = "none") + 
+    scale_color_manual(values = color_values) 
+
+
+ggsave(plot = cd4.naive.plot,
+       filename = "output/F2/cd4naive_slope_spleen.pdf",
+       height = 4, width = 4, useDingbats = FALSE)
+
+ggsave(plot = cd4.naive.plot,
+       filename = "output/F2/cd4naive_slope_spleen.png",
+       height = 4, width = 4, dpi = 300)
+```
+
+
+```{r extract_all_majors, include=TRUE, echo=TRUE}
+
+plot_cell_pop <- function(cell_pop, inputs){
+  #cell_pop <- "Major"
+  #inputs <- all_ps
+  
+  extract_data <- lapply(inputs, function(x, y){
+    #x <- inputs[[1]]
+    dataf <- x$data %>% filter(Tissue == y)
+    dataf <- cbind(dataf, title_name = x$labels$title)
+    dataf$source <- ifelse(grepl("PBL", dataf$title_name), "PBL", "Spleen")
+    return(dataf)
+  }, y = cell_pop)
+  
+  all_major_in_df <- do.call("rbind", extract_data)
+  colnames(all_major_in_df)[1] <- "Cell population" #rename "tissue" to "cell population"
+  colnames(all_major_in_df)[8] <- "Tissue" # rename "source" to "tissue"
+  
+  #unique(all_major_in_df$variable)
+  
+  
+  all_major_in_df$offset <- 0
+  
+  for(i in 1:nrow(all_major_in_df)){
+    if(all_major_in_df[i,"variable"] == "B"){
+      all_major_in_df$offset[i] <- 1
+    }else if(grepl("\\+$", all_major_in_df$variable[i])){
+      all_major_in_df$offset[i] <- 2
+    }else if(grepl("CM$", all_major_in_df$variable[i])){
+      all_major_in_df$offset[i] <- 3
+    }else if(grepl("EM$", all_major_in_df$variable[i])){
+      all_major_in_df$offset[i] <- 4
+    }else if(grepl("EMRA$", all_major_in_df$variable[i])){
+      all_major_in_df$offset[i] <- 5
+    }else if(grepl("naive$", all_major_in_df$variable[i])){
+      all_major_in_df$offset[i] <- 6
+    }
+  }
+  
+  #all_major_in_df$offset <- ifelse(grepl("B", all_major_in_df$variable))
+  
+  
+  
+  shapes <- c(1, 16)
+  names(shapes) <- c("Spleen", "PBL")
+  
+  linetypes <- c("solid", "22")
+  names(linetypes) <- c("PBL", "Spleen")
+  
+  #all_major_in_df$row <- ifelse(grepl("4|B", all_major_in_df$variable), "t", "b")
+  
+  #all_major_in_df$offset <- factor(all_major_in_df$offset,
+  #                                 levels = sort(unique(all_major_in_df$offset)),
+  #                                 ordered = TRUE)
+  
+  all_trend <- ggplot(all_major_in_df, aes(x = new,
+                              y = value,
+                              color = Strain)) +
+    geom_jitter(width = 0.1, height = 0.1, na.rm = TRUE,
+                aes(shape = Tissue)) +  
+    facet_wrap(~variable, nrow = 2, scales = "free_x") +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1),
+          plot.title = element_text(hjust = 0.5),
+          plot.subtitle = element_text(hjust = 0.5),
+          strip.background = element_blank(),
+          legend.position="bottom",
+          #panel.spacing = unit(2, "mm"),
+          panel.spacing.x=unit(1.5, "mm"),
+          panel.spacing.y=unit(0.5, "mm"),
+          legend.margin = margin(rep(0, 4)),
+          legend.box.margin=margin(c(-8, rep(-5, 3)))
+          #plot.margin = margin(rep(0,4)),
+          #legend.spacing.x = unit(0.5, "cm"),
+          #legend.spacing.y = unit(1,"cm")
+          ) +
+    xlab("Age (in months)") +
+    ylab("Percentage") +
+    ggtitle("Cellular composition in PBL and spleen",
+            subtitle = paste0(cell_pop, " cell population")) +
+    geom_smooth(method = "lm", 
+                se = FALSE,
+                size=1, 
+                na.rm = TRUE,
+                #color = "black",
+                aes(linetype = Tissue)) +
+    scale_x_continuous(breaks = c(3,12,18)) +
+    scale_color_manual(values = color_values) +
+    scale_fill_manual(values = color_values) +
+    scale_shape_manual(values = shapes) +
+    scale_linetype_manual(values = linetypes) #+
+    # guides(color=guide_legend(
+    #               #margin(rep(0.5, 4))
+    #               keywidth=0.1,
+    #               keyheight=0.1,
+    #               default.unit="inch"
+    #              )
+    #  )
+  
+  
+  if(plots_in_pdf){
+      ggsave(filename = paste0("output/F2/", cell_pop, "_cell_with_age.pdf"),
+         plot = all_trend,
+         height = 6, width = 8, useDingbats = FALSE)
+  
+      ggsave(filename = paste0("output/F2/", cell_pop, "_cell_with_age.png"),
+         plot = all_trend,
+         height = 6, width = 8, dpi = 300)
+  }else{
+    print(all_trend)
+  }
+ 
+}
+
+all_ps <- list(p1, p2, p3, p4, p5, p6)
+
+major_trends <- plot_cell_pop("Major", all_ps)
+
+il7r_trends <- plot_cell_pop("IL7R+", all_ps)
+
+pd1_trends <- plot_cell_pop("PD1+", all_ps)
+
+
+```
+
+
+```{r change_with_aging_per_tissue, include=TRUE, echo=TRUE}
+orig.dat <- dat <- stored_dat
+
+store_hm_matrices <- vector("list", 2)
+
+coefficients_matrix <- vector("list", 2)
+
+idx_rud <- 0
+
+for(analyze.spleen in c(TRUE,FALSE)){
+  
+  idx_rud <- idx_rud + 1
+  if(analyze.spleen){
+    dat=orig.dat[orig.dat[,"Tissue"]=="spleen",]
+    tissue_now <-"spleen"
+  }else{
+    dat=orig.dat[orig.dat[,"Tissue"]=="PBL",]
+    tissue_now <-"PBL"
+  }
+
+  if(TRANSFORM){
+    for(i in 6:ncol(dat)){
+      dat[,i]=transform(as.numeric(as.matrix(dat[,i])))
+    } 
+  } 
+  
+  # Add cd4/cd8 ratio
+  cell.types.all <- colnames(dat)[6:ncol(dat)]
+  
+  # An example -- B cell composition assocation via age, strain and their interactions
+  exmp=signif(summary(lm(dat[,"B"]~dat$Age*dat$type))$coef[,1],2) %>% as.data.frame
+  
+  # Create empty matrix
+  percent.vs.type.interaction.coef <- percent.vs.type.interaction.p <-
+    matrix(NA,nrow = ncol(dat)-5,ncol =nrow(exmp))
+  
+  
+  colnames(percent.vs.type.interaction.coef) <- colnames(percent.vs.type.interaction.p) <- 
+    rownames(exmp)
+  
+  rownames(percent.vs.type.interaction.coef) <- rownames(percent.vs.type.interaction.p) <- 
+    cell.types.all
+  
+
+  
+  for(i in cell.types.all){
+    # temp is a column from the matrix summary of the linear model, it
+    # contains the Beta values of the model ("Estimate")
+    # It's values are: (Intercept)    dat$Age   dat$typeNZO    dat$Age:dat$typeNZO 
+    temp=signif(summary(lm(dat[,i]~dat$Age*dat$type))$coef[,1],2)
+    percent.vs.type.interaction.coef[i,names(temp)]=temp
+    # this temp will contain the p-values for the model: Pr(>|t|)
+    temp=signif(summary(lm(dat[,i]~dat$Age*dat$type))$coef[,4],2)
+    percent.vs.type.interaction.p[i,names(temp)]=temp
+        
+  }
+  
+  ### variables that have significant interaction 
+  # temp=rowSums(percent.vs.type.interaction.p[,c("dat$typeNZO","dat$Age:dat$typeNZO")]<0.005)>0
+  
+  # CHANGED FIXED BOUNDARY FOR FDR ADJUSTMENT AND CUTOFF at fdr cut off
+  by_type <- p.adjust(percent.vs.type.interaction.p[,c("dat$typeNZO")], "fdr")
+  by_type_and_age <- p.adjust(percent.vs.type.interaction.p[,c("dat$Age:dat$typeNZO")], "fdr")
+  
+  temp=rowSums(cbind((by_type < q_value_cutoff), (by_type_and_age < q_value_cutoff))) > 0
+  
+  sel=percent.vs.type.interaction.p[temp,1]
+  # dat0=dat[,c( "tissue","type","Sex","age","Sample", sel )]
+  dat0=dat
+  
+  datF=dat0[dat0$Sex=="F",]
+  datM=dat0[dat0$Sex=="M",]
+ 
+  datB6=dat0[dat0$type=="B6",]
+  datNZO=dat0[dat0$type=="NZO",]
+  
+  # Fit linear model for AGE only
+  R5=regression(datB6)
+  R6=regression(datNZO)
+  if(analyze.spleen){
+    B6.spleen=R5
+    NZO.spleen=R6
+  }else{
+    B6.PBL=R5
+    NZO.PBL=R6
+  }
+
+    ### test if the intercept and slope for aging effect is different between gender and strain. For the column "M-F in B6” , 1 means slope/intercept for male is larger than female, -1 means the opposite and blank means that there is no significant difference
+  
+  # aging_coef is the lm coefficient of cell type ~ age
+  maineffect.coef=cbind(R5[,"aging_coef"],R6[,"aging_coef"])
+  colnames(maineffect.coef) <- c("B6", "NZO")
+  
+  maineffect.p=cbind(R5[,"aging_p"],R6[,"aging_p"])
+  
+  colnames(maineffect.coef) = colnames(maineffect.p) <- c("B6", "NZO")
+  
+  x=sign(maineffect.coef)*maineffect.p
+  colnames(x)=c("B6","NZO")
+  
+  coefficients_matrix[[idx_rud]] <- list(coef = maineffect.coef,
+                                         p = maineffect.p)
+  names(coefficients_matrix)[idx_rud] <- tissue_now
+  
+  # x0 is a table of p-values where the sign corresponds to the sign of coefficent
+  x0=x
+  
+  var=c("dat$Age:dat$typeNZO")
+  x=sign(percent.vs.type.interaction.coef[,var])*percent.vs.type.interaction.p[,var]
+  # x is a table of p-values (signed according to coeffcient[,var])*percent.vs.type.interaction.p[,var]
+  #x[,c(2,4)]= -x[,c(2,4)]
+  x=cbind(x)
+  colnames(x)=c("NZO-B6")
+  
+  x=cbind(x0,x)
+  
+  store_hm_matrices[[idx_rud]] <- x
+  names(store_hm_matrices)[idx_rud] <- tissue_now
+  
+  # with p values
+  coef.heatmap(x, paste("Change with aging in",dat[1,"tissue"]),
+               path_to_File = paste0("output/F2/heatmap_flow_",
+                                     dat[1,"tissue"],"_72.pdf"),
+               plots_in_pdf = TRUE, -1)
+  # with dots
+  coef.heatmap(x, paste("Change with aging in",dat[1,"tissue"]),
+               path_to_File = paste0("output/F2/heatmap_flow_",
+                                     dat[1,"tissue"],"_points_72.pdf"),
+               plots_in_pdf = TRUE, 16)
+  # with significant slopes
+  coef.heatmap(x, paste("Change with aging in",dat[1,"tissue"]),
+               path_to_File = paste0("output/F2/heatmap_flow_",
+                                     dat[1,"tissue"],"_slopes_72.pdf"),
+               plots_in_pdf = TRUE, -1, main_c = maineffect.coef,
+               main_p = maineffect.p, drop_third = TRUE)
+  
+}
+
+```
+
+```{r extraextra}
+library(dplyr)
+
+dat %>% group_by(Tissue) %>% summarise(meany = mean(B, na.rm = TRUE), sdy = sd(B, na.rm = TRUE))
+
+dat %>% group_by(type) %>% summarise(meany = mean(B, na.rm = TRUE), sdy = sd(B, na.rm = TRUE))
+
+```
+
+
+
+```{r matrices_side_by_side, include=TRUE, echo=TRUE}
+
+coef.heatmap_both(store_hm_matrices, 
+                  path_to_File = "output/F2/heatmap_flow_both_72.pdf", 
+                  plots_in_pdf = TRUE, 
+                  with_symbols = -1)
+
+coef.heatmap_both(store_hm_matrices, 
+                  path_to_File = "output/F2/heatmap_flow_both_points_72.pdf", 
+                  plots_in_pdf = TRUE, 
+                  with_symbols = 16)
+
+coef.heatmap_both(store_hm_matrices, 
+                  path_to_File = "output/F2/heatmap_flow_both_slope_72.pdf", 
+                  plots_in_pdf = TRUE, 
+                  with_symbols = -1,
+                  drop_third = TRUE,
+                  coef_both = coefficients_matrix)
+
+coef.heatmap_both(store_hm_matrices, 
+                  path_to_File = "output/F2/heatmap_flow_both_points_72_only2.pdf", 
+                  plots_in_pdf = TRUE, 
+                  with_symbols = 16,
+                  drop_third = TRUE,
+                  coef_both = coefficients_matrix)
+
+```
+
+
+
+
+
+```{r correlations, include=TRUE, echo=TRUE}
+ggpoint <- function(x,y,xl,yl,title){
+  temp=cor.test(x,y)
+  minx=min(x,na.rm=T)+0.5
+  maxy=max(y,na.rm=T)
+  dat=data.frame(x=x,y=y,type=names(x))
+  
+  p <- ggplot(dat, aes(x,y,color=type)) +
+    geom_point() +
+    labs(x=xl,y=yl,title=title) +
+    annotate("text", label = paste("r=",signif(temp$estimate,2)), 
+             x = minx, y = maxy, size = 5, colour ="red") +
+    theme(legend.text=element_text(size=7)) +
+    geom_vline(xintercept=0,size=0.3) +
+    geom_hline(yintercept=0,size=0.3)
+  
+  return(p)
+}
+
+
+#pdf(file="output/FC_comparison_flow.pdf",width=10)
+
+find_correlation_per_celltype <- function(list_of_type_tissue, 
+                                          cells, 
+                                          cell_type,
+                                          only_significant = FALSE){
+  # list_of_type_tissue <- list(b6_spl = B6.spleen,
+  #                             b6_pbl = B6.PBL,
+  #                             nzo_spl = NZO.spleen,
+  #                             nzo_pbl = NZO.PBL)
+  # cells <- major.cell.id
+  # cells <- pd1.cell.id
+  # cells <- il7r.cell.id
+  
+  filtered_dfs <- lapply(list_of_type_tissue, function(x, cell_rows){
+    x <- data.frame(x)
+    x$names <- rownames(x)
+    adjusted_ps <- p.adjust(x$aging_p, "fdr")
+    x <- cbind(x, adjusted_ps)
+    
+    if(only_significant){
+      x <- x[which(x[,"adjusted_ps"] < 0.05),]
+    }
+    y <- x %>% filter(names %in% cell_rows)
+    return(y)
+  }, cell_rows = cells)
+  
+  
+  if(only_significant){
+    idx_spleen <- intersect(filtered_dfs[["b6_spl"]][["names"]],
+                        filtered_dfs[["nzo_spl"]][["names"]])
+    
+    idx_pbl <- intersect(filtered_dfs[["b6_pbl"]][["names"]],
+                            filtered_dfs[["nzo_pbl"]][["names"]])
+    
+    idx_b6 <- intersect(filtered_dfs[["b6_spl"]][["names"]],
+                        filtered_dfs[["b6_pbl"]][["names"]])
+    
+    idx_nzo <- intersect(filtered_dfs[["nzo_spl"]][["names"]],
+                         filtered_dfs[["nzo_pbl"]][["names"]])
+  }else{
+    idx_spleen = idx_pbl = idx_b6 = idx_nzo <- cells
+  }
+  
+  datasets_and_ind <- list(spleen = list("b6_spl", "nzo_spl", idx_spleen),
+                   pbl = list("b6_pbl", "nzo_pbl", idx_pbl),
+                   b6 = list("b6_pbl", "b6_spl", idx_b6),
+                   nzo = list("nzo_spl", "nzo_pbl", idx_nzo))
+  correlations <- vector("numeric", 4)
+  names(correlations) <- names(datasets_and_ind)
+  
+  for(i in 1:4){
+    ins <- datasets_and_ind[[i]]
+    x <- filtered_dfs[[ins[[1]]]] %>% 
+      filter(names %in% ins[[3]]) %>%
+      select(aging_coef)
+    
+    y <- filtered_dfs[[ins[[2]]]] %>%
+      filter(names %in% ins[[3]]) %>%
+      select(aging_coef)
+      
+    correlations[i] <- cor(x,y)
+  }
+  
+  var_and_val <- data.frame(Variable = names(correlations), 
+                            Correlation = correlations)
+  
+  df_of_cor <- cbind(Cell_type = cell_type, var_and_val)
+  df_of_cor$Option <- ifelse(grepl("pbl|spleen|spl", df_of_cor$Variable),
+                             "Tissue", "Strain")
+  df_of_cor <- df_of_cor[,c("Cell_type", "Variable", "Option", "Correlation")]
+  
+  return(df_of_cor)
+}
+
+major.cell.id <- c("B", "CD4", "CD8", "CD4.Naive", "CD4.CM", "CD4.EM",
+                   "CD4.EMRA", "CD8.Naive","CD8.CM", "CD8.EM","CD8.EMRA")
+
+il7r.cell.id <- paste0("IL7R.", major.cell.id)
+
+pd1.cell.id <- paste0("PD1.", major.cell.id)
+
+
+list_of_dfs <- list(b6_spl = B6.spleen, 
+                    b6_pbl = B6.PBL, 
+                    nzo_spl = NZO.spleen, 
+                    nzo_pbl = NZO.PBL)
+
+
+
+
+analyze_dfs_produce_correlations <- function(list_of_dfs,
+                                             filter_to_significant,
+                                             path_to_pdf,
+                                             produce_pdfs = TRUE,
+                                             narrow = -1){
+  
+  major_df <- find_correlation_per_celltype(list_of_type_tissue =
+                                              list_of_dfs,
+                                          cells = major.cell.id,
+                                          cell_type = "Major",
+                                          only_significant = 
+                                            filter_to_significant)
+  
+  il7r_df <- find_correlation_per_celltype(list_of_type_tissue = list_of_dfs,
+                                           cells = il7r.cell.id,
+                                           cell_type = "IL7R+",
+                                           only_significant =
+                                             filter_to_significant)
+  
+  pd1_df <- find_correlation_per_celltype(list_of_type_tissue = list_of_dfs,
+                                          cells = pd1.cell.id,
+                                          cell_type = "PD1+",
+                                          only_significant = 
+                                            filter_to_significant)
+  
+  
+  correlations_df <- rbind(major_df, il7r_df, pd1_df)
+  
+  correlations_df$Variable <- as.character(correlations_df$Variable)
+  
+  correlations_df[grep("pbl|b6|nzo", correlations_df$Variable),"Variable"] <-
+    toupper(correlations_df[grep("pbl|b6|nzo",
+                                 correlations_df$Variable),"Variable"])
+  
+  correlations_df$Cell_type <- factor(correlations_df$Cell_type, 
+                                      levels = c("PD1+", "IL7R+", "Major"))
+    
+  correlations_df$Option[correlations_df$Option == "Tissue"] <- "B6 vs NZO"
+  correlations_df$Option[correlations_df$Option == "Strain"] <- "PBL vs SPL"
+  
+  p_all <- ggplot(data=correlations_df, aes(y=Correlation, 
+                                            x=Cell_type,
+                                            fill=Variable)) +  
+    geom_bar(stat="identity", position=position_dodge()) +
+    theme_minimal() +
+    facet_wrap(~Option, ncol = 2, scales = "free") +
+    coord_flip() +
+    labs(x="Cell population") +
+    scale_fill_manual(values=color_values) #c("PBL"="#d73027", "spleen"= "#4575b4",
+                                          #"B6" = "#1a9850", "NZO" = "grey"))
+  
+  correlations_df_strain <- correlations_df %>% filter(Option == "Strain")
+  colnames(correlations_df_strain) <- c("cell_type", "Strain",
+                                       "Option", "Correlation")
+  
+  p_strain <- ggplot(data=correlations_df_strain, aes(y=Correlation, 
+                                                      x=cell_type, 
+                                                      fill=Strain)) +  
+    geom_bar(stat="identity", position=position_dodge()) +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    ggtitle("Comparison across Tissues") +
+    coord_flip() +
+    labs(x="Cell population", y = "Pearson correlation coefficient") +
+    scale_fill_manual(values=color_values) #c("PBL"="#d73027", "spleen"= "#4575b4",
+                               #"B6" = "#1a9850", "NZO" = "grey"))
+    
+  correlations_df_tissue <- correlations_df %>% filter(Option == "Tissue")
+  colnames(correlations_df_tissue) <- c("cell_type", "Tissue",
+                                        "option", "Correlation")
+  
+  p_tissue <- ggplot(data=correlations_df_tissue, 
+                     aes(y=Correlation, x=cell_type, fill=Tissue)) +  
+    geom_bar(stat="identity", position=position_dodge()) +
+    theme_minimal() +
+    ggtitle("Comparison across Strains") +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    coord_flip() +
+    labs(x="Cell population", y = "Pearson correlation coefficient") +
+    scale_fill_manual(values = color_values) #c("PBL"="#d73027", "spleen"= "#4575b4",
+                                             #"B6" = "#1a9850", "NZO" = "grey"))
+  
+  if(produce_pdfs){
+    pdf(paste0(path_to_pdf, "_all.pdf"), width =ifelse(narrow > 0, narrow, 10), height = 4)
+  }
+  plot(p_all + 
+         theme(panel.spacing = unit(2, "lines"),
+               legend.title = element_text(hjust = 0.5)) +
+         guides(fill = guide_legend(ncol = ifelse(narrow > 0, 1, 2))))
+       
+  # theme(plot.margin = unit(c(1,1,1,1), "cm"))
+  if(produce_pdfs){
+    dev.off()
+  }
+  
+  if(produce_pdfs){
+    pdf(paste0(path_to_pdf, "_strain_72.pdf"), width = 4.7, height = 3.6)
+  }
+  
+  plot(p_strain)
+  if(produce_pdfs){
+    dev.off()
+  }
+  
+  if(produce_pdfs){
+    pdf(paste0(path_to_pdf, "_tissue_72.pdf"), width = 4.7, height = 3.6)
+  }
+  
+  plot(p_tissue)
+  
+  if(produce_pdfs){
+    dev.off()
+  }
+  return(list(p_all, p_strain, p_tissue))
+}
+
+  
+
+#### correlation for significant
+
+correlations_all <- analyze_dfs_produce_correlations(list_of_dfs =
+                                                       list_of_dfs,
+                                                     filter_to_significant =
+                                                       FALSE,
+                                                     path_to_pdf =
+                                                  "output/F2/plot_correlations_72",
+                                                  narrow = 8)
+
+
+correlations_filtered <- analyze_dfs_produce_correlations(list_of_dfs =
+                                                       list_of_dfs,
+                                                     filter_to_significant =
+                                                       TRUE,
+                                                     path_to_pdf =
+                                                  "output/F2/plot_correlations_significant_72")
+
+```
+
+```{r Lasso Model for Flow Cytometry}
+
+flow.humanized <- rbind(
+  flow %>% as.data.frame %>% filter(type == "NZO") %>% 
+    mutate(Human_Age = case_when((Age == " 3") ~ 35.36,
+                                 (Age == 12)~ 56.59,
+                                 (Age == 18)~ 82.42)),
+  flow %>% as.data.frame %>% filter(type == "B6") %>% 
+                    mutate(Human_Age = case_when(
+                                      (Age == " 3") ~ 20,
+                                      (Age == 12)~ 42.5,
+                                      (Age == 18)~ 56))
+)
+
+# Get all cell types
+train <- flow.humanized[,c("Human_Age", cell.types)]
+
+# Convert to numeric 
+train.converted <- apply(train, 2, as.numeric) %>% as.data.frame
+
+# Predictor variables
+x <- model.matrix(Human_Age ~ . , train.converted)[,-1] 
+
+# Outcome variable
+y.orig <- train.converted$Human_Age
+
+  
+# 10 fold cross validation procedure minimizing CVM
+cv <- cv.glmnet(x, y.orig, alpha = 1, nfold = 10)
+
+# Create lasso model
+lassomodel <- glmnet(x, y.orig, alpha = 1, lambda = cv$lambda.min) 
+
+#see coefs for cell types   
+coef(lassomodel)
+
+# predict all ages with the best model
+y.pred <- predict(lassomodel, newx = x, s = "lambda.min")
+
+# Residuals
+y.orig - y.pred
+
+
+df.lasso.mice <- 
+  data.frame (Strain = flow.humanized[,"type"], 
+              y.orig = y.orig, 
+              y.pred = y.pred %>% as.vector, stringsAsFactors = F) 
+
+# Lin's concordance value
+# We use it to assess the agreement between predicted and chronological ages
+concordance <- CCC(df.lasso.mice$y.orig, df.lasso.mice$y.pred)[[1]][[1]]
+
+formula <- y ~ poly(x, 1, raw = TRUE)
+flow.lasso.mice.plot <- 
+  df.lasso.mice %>% 
+  ggplot(aes(y.orig, y.pred)) + 
+  geom_jitter(aes(color = Strain), size = 3, width = 0.2, height = 0.2) + theme_pubr() +
+  geom_smooth(method = "lm", se =F, formula = formula, color = "darkgray") + 
+  ylab("") + xlab("") + scale_color_manual(values = color_values) +
+  scale_x_continuous(breaks = c(20,60,100), limits = c(10,100)) + 
+  scale_y_continuous(breaks = c(20,60,100), limits = c(10,100)) + 
+  ggtitle ("Mice cohort") + 
+  stat_poly_eq(label.x = 0.95, 
+               label.y = 0.1, size = 3.5, color = "black",
+               aes(label = paste("atop(",stat(rr.label), ")", sep = "")), 
+               formula = formula, coef.digits = 3,
+               parse = TRUE) +
+  geom_text(aes(x=90, y=20, label=paste0("CCC: ",signif(concordance,2))), size=3.5, 
+            data = data.frame()) + 
+  theme(axis.text.x = element_text(angle = 91, hjust = 1), 
+            plot.title = element_text(hjust = 0.5, size = 16),
+            strip.background = element_blank(),
+            strip.text.x = element_blank(),
+            legend.position = "none")
+
+ggsave(plot = flow.lasso.mice.plot, filename = "output/F2/flow_mice_lasso.pdf",
+       useDingbats = F, width = 3.5, height = 3.5)
+```
+
+

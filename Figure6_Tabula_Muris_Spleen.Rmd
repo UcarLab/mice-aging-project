@@ -1,0 +1,458 @@
+---
+title: "Tabula_Muris_Spleen"
+author: "EO Karakaslar"
+date: "3/11/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "/Users/karako/Dropbox (JAX)/MouseAging_clean/NatureAgingSubmission/") #set root dir!
+```
+
+```{r}
+library(dplyr)
+library(ggpubr)
+library(Seurat)
+library(ggplot2)
+
+source("code/color_values.R")
+
+# Data available here:
+# https://cells.ucsc.edu/?ds=tabula-muris-senis%2Fdroplet%2Fspleen
+
+meta <- read.delim("data/Tabula_muris/meta.tsv", sep="\t", header = TRUE, row.names = 1) 
+rownames(meta) <- gsub("-", ".", rownames(meta))
+# fix 3m
+rownames(meta) <- gsub("10X", "X10X", rownames(meta))
+# sort ages for down-stream
+meta$age <- factor(meta$age, levels = c("1m", "3m", "18m", "21m", "24m", "30m"))
+
+countsData <- read.table(file = "data/Tabula_muris/exprMatrix.tsv.gz", header = TRUE, row.names = 1,sep = "\t")
+
+
+
+spleen <- CreateSeuratObject(counts = countsData, meta.data = meta, project = "Tabula_spleen")
+
+# QC
+spleen[["percent.mt"]] <- PercentageFeatureSet(spleen, pattern = "^MT-")
+VlnPlot(spleen, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+# subset 3&18 months
+spleen.subset <- subset(spleen, subset = age %in% c("3m", "18m"))
+
+meta <- meta[meta$age %in% c("3m", "18m"),]
+```
+
+
+```{r}
+# Normalization
+spleen.subset <- NormalizeData(spleen.subset, normalization.method = "LogNormalize", scale.factor = 10000)
+
+all.genes <- rownames(spleen.subset)
+spleen.subset <- ScaleData(spleen.subset, features = all.genes)
+
+
+spleen.subset <- FindVariableFeatures(spleen.subset, selection.method = "vst", nfeatures = 2000)
+
+spleen.subset <- RunPCA(spleen.subset, features = VariableFeatures(object = spleen.subset))
+
+## Unsupervised
+# spleen <- FindNeighbors(spleen, dims = 1:10)
+# spleen <- FindClusters(spleen, resolution = 0.5)
+
+
+spleen.subset <- RunUMAP(spleen.subset, dims = 1:10)
+
+saveRDS(spleen.subset, file = "../data/Tabula_muris/spleen_seurat_subset.rds")
+```
+
+```{r control gene numbers by age}
+spleen.subset <- readRDS("data/Tabula_muris/spleen_seurat_subset.rds")
+
+ggplot(spleen.subset@meta.data, aes(age, Expressed.Genes, fill = age)) + geom_violin() + ylab("Number of expressed genes per cell") + xlab("Age") + theme_pubr() + scale_fill_manual(values = color_values) + labs(fill = "Age")
+
+ggsave("output/F6/Violin_expressed_genes_per_cell.pdf", width = 5, height = 5)
+```
+
+```{r}
+library(RColorBrewer)
+library(paletteer)
+library(ggplot2)
+library(patchwork)
+library(reshape2)
+
+palette <- RColorBrewer::brewer.pal(9, "Reds")
+palette[1] <- "#adadad"
+```
+
+
+```{r}
+pdf("output/F6/spleen_macrophage_all.pdf", width = 5, height = 8)
+FeaturePlot(spleen.subset, features = c("Cd14", "Fosl2", "Jun", "Fos"),order = T,
+            cols = palette, pt.size = 1, split.by = "age", 
+            cells = rownames(meta)[meta$cell_ontology_class %in% c("macrophage")]) & FontSize(x.text = 10, y.text = 10, x.title = 10, y.title = 10)
+dev.off()
+```
+
+
+```{r}
+pdf("output/F6/Spleen_cell_types.pdf", width = 8, height = 5)
+DimPlot(spleen.subset, group.by = 'cell_ontology_class', 
+        cols = paletteer_d("yarrr::basel"), pt.size = 0.8) &
+    FontSize(x.text = 12, y.text = 12, x.title = 14, y.title = 14, main = 0)  
+dev.off()
+
+pdf("output/F6/Spleen_age.pdf", width = 6, height = 5)
+DimPlot(spleen.subset, group.by = 'age', 
+        cols = color_values, pt.size = 0.8) &
+    FontSize(x.text = 12, y.text = 12, x.title = 14, y.title = 14, main = 0) 
+dev.off()
+
+# All spleen subsets
+plot.fosl2 <- FeaturePlot(spleen.subset, features = c("Jun", "Fos","Fosl2"),
+                          cols = palette, split.by = "age", order = TRUE, pt.size = 0.8 ) & FontSize(x.text = 10, y.text = 10, x.title = 10, y.title = 10)
+
+pdf("output/F6/spleen_fosl2_all.pdf", width = 6, height = 8)
+plot.fosl2
+dev.off()
+
+# Only t-cells
+plot.fosl2.tcell <- FeaturePlot(spleen.subset, features = c("Jun", "Fos","Fosl2", "Cd8a"),
+                          cols = palette, split.by = "age", order = TRUE, pt.size = 0.8, 
+                          cells = rownames(meta)[meta$cell_ontology_class == "T cell"]) & FontSize(x.text = 10, y.text = 10, x.title = 10, y.title = 10)
+
+pdf("output/F6/spleen_tcells_fosl2.pdf", width = 14, height = 8)
+plot.fosl2.tcell
+dev.off()
+```
+
+```{r}
+library(ggpubr)
+genes <- c("Jun", "Fos","Fosl2", "Cd8a")
+
+meta$cell.name <- rownames(meta)
+
+countsData.normalized <- countsData
+
+# get the t-cell subset
+genes.count <- countsData.normalized[genes,rownames(meta)[meta$cell_ontology_class == "T cell"]]
+
+cd8.ids <- names(genes.count)[genes.count["Cd8a",] > 0]
+
+meta.cd8 <- meta[cd8.ids,]
+
+cd8.age.groups <- split(meta.cd8$cell.name, meta.cd8$age)
+
+
+avg.exp <- lapply(cd8.age.groups, function(x){
+    data.frame(t(genes.count[,x]))
+}) %>% bind_rows(., .id = "age")
+
+avg.exp$age <- factor(avg.exp$age, levels = c("1m", "3m", "18m", "21m", "24m", "30m"))
+
+df.plot <- avg.exp[, -5] %>% melt(value.name = "expression") %>% group_by(age, variable) %>% summarise(ratio = sum(expression > 0)/n())
+
+lapply(genes[-4], function(gene){
+    ggplot(df.plot %>% filter(variable == gene, .preserve = T), aes(age, ratio)) + geom_line(aes(group = 1)) + 
+        theme_pubr() + xlab("Age") + ylab("% of CD8+ T cells") + geom_point(size = 1.2) + ggtitle(gene) +
+        theme(plot.title = element_text(hjust = 0.5))
+    
+    ggsave(paste0("output/F6/", gene, "_percentage_CD8_Tcells.pdf"), width = 4, height = 3)
+})
+```
+
+```{r macrophage}
+library(ggpubr)
+genes <- c("Jun", "Fos","Fosl2", "Tlr2", "Tlr3", "Tl4")
+cell.types <- unique(meta$cell_ontology_class)[c(1,2,3,5)]
+meta$cell.name <- rownames(meta)
+
+countsData.normalized <- countsData
+
+lapply(genes, function(gene){
+    
+    gene.expression.per.cell.type <- 
+    lapply(cell.types, function(cell.type){
+    
+        # get the t-cell subset
+        genes.count <- countsData.normalized[gene,rownames(meta)[meta$cell_ontology_class == cell.type]]
+        
+        meta.ct <- meta[meta$cell_ontology_class == cell.type,]
+        
+        ct.age.groups <- split(meta.ct$cell.name, meta.ct$age)
+        
+        
+        avg.exp <- lapply(ct.age.groups, function(x){
+            if(length(x) > 0){
+                eval(parse(
+                    text = paste0(
+                        "data.frame(",gene," = t(genes.count[,x]))"
+                    )
+                 ))
+            }
+        })  %>% Filter(Negate(is.null), .) 
+        
+        avg.exp <- bind_rows(avg.exp , .id = "age")
+        
+        
+        avg.exp$age <- factor(avg.exp$age, levels = c("1m", "3m", "18m", "21m", "24m", "30m"))
+        
+        df.plot <- avg.exp %>% 
+            melt(value.name = "expression") %>% 
+            group_by(age, variable) %>% 
+            summarise(ratio = sum(expression > 0)/n())
+        
+        return(data.frame(df.plot))
+    })
+    
+    names(gene.expression.per.cell.type) <- cell.types
+    
+    df.cell.type <- bind_rows(gene.expression.per.cell.type, .id = "cell.type")
+    
+    pheatmap.val<- acast(df.cell.type, cell.type ~ age)
+    
+    breaksList = seq(0, max(pheatmap.val*100), by = .001)
+    
+    pdf(paste0("output/F6/Pheatmap_cell_type_vs_age_", gene, ".pdf"), width = 2, height = 4)
+    pheatmap::pheatmap(pheatmap.val * 100, cluster_cols = FALSE, cluster_rows = FALSE,
+                       color =  colorRampPalette((brewer.pal(n = 9, name = "Blues")))(length(breaksList)),
+                       breaks = breaksList, border_color = "white", main = gene, display_numbers = T,
+                       fontsize_number = 9,
+                       number_color = "white", legend = F)
+    dev.off()
+})
+
+pdf("output/F6/Spleen_major_cell_types_.pdf", width = 7, height = 5)
+DimPlot(spleen.subset, group.by = 'cell_ontology_class', 
+        cols = paletteer_d("yarrr::basel"), pt.size = 0.8, cells = (spleen.subset$cell_ontology_class %in% cell.types)) &
+    FontSize(x.text = 12, y.text = 12, x.title = 14, y.title = 14, main = 0, )  
+dev.off()
+
+
+
+pdf("output/F6/Spleen_major_cell_types_age.pdf", width = 6, height = 5)
+DimPlot(spleen.subset, group.by = 'age', cells = (spleen.subset$cell_ontology_class %in% cell.types),
+        cols = color_values, pt.size = 0.8, shuffle = T) &
+    FontSize(x.text = 12, y.text = 12, x.title = 14, y.title = 14, main = 0) 
+dev.off()
+
+# # All spleen subsets
+# plot.fosl2 <- FeaturePlot(spleen.subset, features = c("Jun", "Fos","Fosl2"), cells = 
+#                           cols = palette, split.by = "age", order = TRUE, pt.size = 0.8) & FontSize(x.text = 10, y.text = 10, x.title = 10, y.title = 10)
+# 
+# pdf("output/F6/spleen_major_cell_types_ap1_all.pdf", width = 6, height = 8)
+# plot.fosl2
+# dev.off()
+
+pdf("output/F6/spleen_number_of_cells_per_cell_type.pdf", width = 10, height = 5.5)
+spleen.subset@meta.data %>%count(cell_ontology_class) %>% arrange(n) %>% 
+    ggplot(aes(reorder(stringr::str_wrap(cell_ontology_class, 15), n), n, fill = ifelse(n > 100, "YES", "NO"))) + geom_bar(stat = "identity") + coord_flip()+ scale_fill_manual(values = c("#adadad", "#de2312")) + labs(fill = "Number of cells > 100") + xlab("") + ylab("Total number of cells") +theme_classic(base_size = 16)
+dev.off()
+
+pdf("output/F6/spleen_subset_percentage_cells_per_sample.pdf", width = 7, height = 5.5)
+spleen.subset@meta.data %>% filter(cell_ontology_class%in%cell.types) %>% count(mouse.id,cell_ontology_class) %>% group_by(mouse.id) %>% mutate(freq = n/sum(n)*100) %>% ggplot(aes(mouse.id, freq, fill = cell_ontology_class)) + geom_bar(stat="identity") + xlab("Mouse ID") + ylab("% of cells") + scale_fill_manual(values = paletteer_d("yarrr::basel")) + labs(fill = "Cell Type") + theme_classic(base_size = 16) + coord_flip()
+dev.off()
+
+
+
+```
+
+
+```{r TLR expressions}
+pdf("output/F6/spleen_major_cell_types_TLRs.pdf", width = 6, height = 8)
+# All spleen subsets
+FeaturePlot(spleen.subset, features = c("Tlr2", "Tlr3","Tlr4"),
+                          cols = palette, split.by = "age", order = TRUE, pt.size = 0.8) & FontSize(x.text = 10, y.text = 10, x.title = 10, y.title = 10)
+dev.off()
+```
+
+```{r IL1B, TNFa, IL6}
+pdf("output/F6/spleen_major_cell_types_inflammation.pdf", width = 6, height = 8)
+# All spleen subsets
+FeaturePlot(spleen.subset, features = c("Tnf","Il1b"),
+                          cols = palette, split.by = "age", order = TRUE, pt.size = 0.8) & FontSize(x.text = 10, y.text = 10, x.title = 10, y.title = 10)
+dev.off()
+```
+```{r cJUN binding levels}
+cJun.table <- readxl::read_excel("Supplementary/Summary Tables/c-Jun Binding ELISA data.xlsx", sheet = "PlotReady")
+pdf("output/F6/cJUN_binding.pdf", width = 9, height = 4.25)
+ggplot(cJun.table, aes(as.factor(Age), Value ,fill = as.factor(Age))) + geom_boxplot() + geom_jitter(width = 0.1) + facet_wrap(~ Type) + theme_bw(base_size = 17) + scale_fill_manual(values = color_values) + stat_compare_means(method = "t.test", label = "p.format", size = 5, hjust = -0.1 , label.y = 9.5) + labs(fill = "Age") + ylab("Fold change of cJun binding\n(normalized to non-stimulated)") + xlab("") + ylim(c(0,10)) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+dev.off()
+```
+
+```{r}
+il1b.table <- readxl::read_excel("Supplementary/Summary Tables/Table S11 (IL6 cytokine levels).xlsx", sheet = "PlotReady")
+
+library(rstatix)
+library(ggpubr)
+stat.test <- il1b.table %>%
+  group_by(Status) %>%
+  rstatix::t_test(Value ~ Age) %>%
+  rstatix::adjust_pvalue(method = "bonferroni") %>%
+  rstatix::add_significance("p.adj") %>% 
+  rstatix::add_xy_position(x = "Status", dodge = 0.8)
+stat.test <- stat.test[, -14]
+
+stat.test2 <- il1b.table %>%
+  group_by(Age) %>%
+  rstatix::t_test(Value ~ Status) %>%
+  rstatix::adjust_pvalue(method = "bonferroni") %>%
+  rstatix::add_significance("p.adj") %>% 
+  rstatix::add_xy_position(x = "Status", dodge = 0.9)
+
+colnames(stat.test2)[1] <-"Status"
+stat.test2$y.position[2] <- 0.7
+
+stat.test.final <- rbind(stat.test, stat.test2)
+
+pdf("output/F6/IL1b_IL6_ELISA.pdf", width = 8, height = 6)
+ggplot(il1b.table %>% filter(Molecule == "IL6"), 
+       aes(Status, Value)) +
+  geom_boxplot(aes(fill = as.factor(Age)), size = 0.2, width = 0.5) + 
+  geom_point(aes(shape = Sex, group = as.factor(Age)), 
+             position = position_jitterdodge(jitter.width = 0.1, dodge.width = 0.5), size = 3) + 
+  stat_pvalue_manual(stat.test.final,  label = "p", tip.length = 0, label.size = 6, bracket.nudge.y = -0.05) + 
+  theme_bw(base_size = 18) + 
+  scale_fill_manual(values = color_values) + labs(fill = "Age") + ylab("Absorbance (pg/mL)") + xlab("") + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+          legend.direction="vertical", legend.box = "horizontal",
+          strip.background = element_rect(colour="#FFFFFF", fill="#FFFFFF", size = 0 ), 
+          strip.text = element_text(color =  "#FFFFFF"),
+          legend.key.size = unit(1, 'cm'), legend.title = element_text(size=12), legend.text = element_text(size=10), legend.spacing.x = unit(0.01, 'cm')) +
+  theme(axis.text.x = element_text(size = 14, angle = 45, vjust = 0.5)) + ylim(c(0,0.7))
+   
+dev.off()
+
+
+
+stat.test.sex <- il1b.table %>%
+  group_by(Status, Age) %>%
+  rstatix::kruskal_test(Value ~ Sex) %>%
+  rstatix::adjust_pvalue(method = "bonferroni") %>%
+  rstatix::add_significance("p.adj")
+
+stat.test.sex
+writexl::write_xlsx(stat.test.sex, "Supplementary/Summary Tables/extras/PolyIC_vs_noStim_for_Age_Sex_wilcox.xlsx")
+
+```
+
+```{r assigning AP-1 subunits to their genes}
+
+TF.files.2 <- list.files("output/F5/TF_Footprint_Mice_Common_Signatures/", recursive = T, pattern = "sub", full.names = T)
+
+TF.files.annotated <- lapply(TF.files.2, function(x){
+  
+  
+  bed <- read.csv(x, sep = "\t", header = FALSE)
+  genome <- cinaR::grcm38
+  
+  colnames(bed)[1:3] <- c("CHR", "Start", "End")
+  bed.GRanges <- GenomicRanges::GRanges(bed)
+  
+  
+  annotated.peaks <- ChIPseeker::annotatePeak(bed.GRanges,
+                                              TxDb = TxDb.Mmusculus.UCSC.mm10.knownGene::TxDb.Mmusculus.UCSC.mm10.knownGene,
+                                              verbose = F)
+  
+  
+  annoPeaks.anno <- annotated.peaks@anno
+  
+  # 100K threshold distance2tss
+  annoPeaks.anno <- annoPeaks.anno[abs(annoPeaks.anno$distanceToTSS) < 10e5]
+  
+  entrezids <- unique(annoPeaks.anno$geneId)
+  
+  
+  
+  # entrez to gene name mapping
+  entrez2gene <-
+    base::subset(genome,
+                 genome$entrez %in% entrezids,
+                 select = c('entrez', 'symbol'))
+  
+  # Match to each annotation dataframe
+  m <- match(annoPeaks.anno$geneId, entrez2gene$entrez)
+  annoPeaks.anno$gene_name <- entrez2gene$symbol[m]
+  
+  return(annoPeaks.anno)
+})
+
+tf.meta <- strsplit(TF.files.2, split = "/", fixed = T) %>% sapply(function(x){x[6]})
+names(TF.files.annotated) <- tf.meta
+
+# save(TF.files.annotated, file = "analysis/cache/TF_files_annotated_list.RDS")
+load(file = "analysis/cache/TF_files_annotated_list.RDS")
+
+il6.counts <- lapply(TF.files.annotated, function(x){sum(grepl("Il6", x$gene_name), na.rm = T)})
+
+
+il6.counts.df <- cbind(data.frame(il6.count = do.call(rbind, il6.counts)), 
+                       do.call(rbind, strsplit(tf.meta, "_", fixed = T))) 
+
+il6.counts.df <- il6.counts.df[,c(1,3,4,5,6,9)]
+
+colnames(il6.counts.df) <- c("Count", "TCT", "Age", "Sex", "Strain", "TF")
+
+il6.counts.df$TF <- strsplit(il6.counts.df$TF, ".", fixed = T) %>% sapply(function(x){x[1]})
+
+il6.counts.df$TCT[il6.counts.df$TCT == "memory"]<- "CD8+ Memory"
+il6.counts.df$TCT[il6.counts.df$TCT == "naive"]<- "CD8+ Naive"
+il6.counts.df$TCT[il6.counts.df$TCT == "spleen"]<- "Spleen"
+
+il6.counts.df$Age <- factor(il6.counts.df$Age, levels = c("3mo", "12mo", "18mo"), labels = c(3,12,18))
+
+
+RmType <- function(string) {
+  sub("._", "", string)
+}
+
+
+pdf("output/F6/Number_of_IL6_around_AP1_subunits.pdf", width = 5.5, height = 7.5)
+ggplot(il6.counts.df %>% filter (Strain == "B6" & Age != 12 & TCT %in% c("PBL", "Spleen") & !(TF %in% c("JDP2", "NFE2L2"))), 
+       aes(Age, Count, fill = Age)) + geom_bar(stat = "identity") + xlab("") + 
+  scale_fill_manual(values = color_values) +  facet_grid(c("TF", "TCT"), labeller = labeller(BothLabels = RmType)) +
+  theme_minimal(base_size = 28) + ylab("Number of TFs around Il6 gene") + scale_y_continuous(breaks=c(0, 5)) + theme(strip.text.y = element_text(angle = 0)) + labs(caption = "distance to TSS < 100Kb") + theme(legend.position = "none") 
+dev.off()
+```
+
+
+```{r Neerja object load}
+seu.obj <- readRDS("data/Tabula_muris/spleen_seurat_subset_rename_ident_Oct24.rds")
+```
+
+```{r}
+seu.obj$age <- factor(seu.obj$age, levels = c("3m", "18m"))
+seu.obj$cell.type <- Idents(seu.obj)
+
+
+lapply(c("Jun", "Fos", "Fosb"), function(gene.name){
+  
+  pie.str <- cbind(gene = seu.obj@assays$RNA@data[gene.name,],  seu.obj@meta.data)
+  
+  plot.vln <- ggplot(pie.str %>% filter(gene > 0), aes(cell.type, log(gene), fill = age)) + geom_violin() + 
+    stat_compare_means(tip.length = 0.01, vjust = 0.1, label = "p.format", size = 3) + theme_bw(base_size = 12) + 
+    xlab("") +  scale_fill_manual(values =  color_values) + ylab("") + ggtitle(gene.name) +
+    labs(fill = "Age") + theme(legend.position = "none")
+  
+  # plot.vln <- VlnPlot(seu.obj, 
+  #         features = gene.name, group.by = 'age',  log = T, cols = color_values) + 
+  #    stat_compare_means(aes(group = cell.type) ,comparisons = list(c("3m", "18m")), na.rm = T, 
+  #                       tip.length = 0.01, vjust = 0.1) + 
+  #   facet_wrap(~ seu.obj$cell.type, nrow = 1) + theme_bw(base_size = 14) + xlab("")
+
+  
+  plot.prop <- pie.str %>% group_by(cell.type, age) %>% count(gene > 0) %>% mutate(prop = n/sum(n) * 100) %>% 
+    ggplot(aes(cell.type, prop, group = age, fill = `gene > 0`)) + geom_col() + 
+    scale_fill_manual(values = c("gray", "black")) + facet_wrap( ~ cell.type + age, scales = "free_x", nrow = 1) + theme_bw() + ylab("") + xlab("") + theme(strip.text.x = element_blank(), axis.text.x = element_blank(), legend.position = "none") + labs(fill = "Expressing") 
+  
+  pdf(paste0("output/F5/", gene.name, "_Tabula_expression_proportion.pdf"), width = 4, height = 6)
+  print(ggarrange(plot.vln,plot.prop, nrow = 2, heights = c(2,1)), newpage = F)
+  dev.off()
+  
+})
+
+
+
+```
+

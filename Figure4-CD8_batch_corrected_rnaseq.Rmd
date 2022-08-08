@@ -1,0 +1,604 @@
+---
+title: "Figure4 - CD8 Batch Corrected"
+author: "E Onur Karakaslar"
+date: "1/15/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+require(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+opts_knit$set(root.dir = "/Users/karako/Dropbox (JAX)/MouseAging_clean/") #set root dir!
+```
+
+```{r libraries}
+library(sva)
+library(dplyr)
+library(edgeR)
+library(fgsea)
+library(purrr)
+library(ggplot2)
+library(reshape2)
+```
+
+
+```{r preprocess-data}
+preprocess_data <- function(tissue_cell_type){
+  
+  cat  (paste0("Loading RNAseq data for: ", toupper(tissue_cell_type), "\n"))
+  name <- load (paste0("./data/RNAseq/F3_input/rnaseq-expcount-",tissue_cell_type,'.RData'))
+  count.matrix <- get(name)
+  
+  # Enforce all counts to be integers
+  count.matrix <- round(count.matrix, 0)
+  
+  # Filter low-expressed genes
+  # Keep the genes that have Count-Per-Million more than k = 0.5 in n = 1 samples
+  # It is pretty similar to filterByExpr(y, min.count = 0.5) but its choice of n is different.
+  count.matrix.filtered <- count.matrix [rowSums(cpm(count.matrix) >= 0.5) >= 2,]
+  
+  # normalize with cpm
+  count.matrix.normalized <- cpm(count.matrix.filtered, log = F)
+  
+  sample_rna <- colnames(count.matrix) %>% strsplit(".", fixed = T)
+  
+  STRAIN = TYPE <- sapply(sample_rna, function(x){
+    x[1]
+  })
+  
+  AGE    <- sapply(sample_rna, function(x){
+    as.numeric(gsub("([0-9]+).*$", "\\1", x[2] %>% trimws)) 
+  }) 
+  
+  GENDER <- sapply(sample_rna, function(x){
+    x[3]
+  }) 
+  
+  TISSUE <- sapply(sample_rna, function(x){
+    x[4]
+  }) 
+  
+  SAMPLEMOUSEID <- sapply(sample_rna, function(x){
+    x[5]
+  }) 
+  
+  specs = NULL
+  specs$STRAIN <- STRAIN
+  specs$TYPE   <- TYPE
+  specs$AGE    <- AGE
+  specs$GENDER <- GENDER 
+  specs$TISSUE <- TISSUE
+  specs$SAMPLEMOUSEID <- SAMPLEMOUSEID
+  
+  result <- list(count.matrix= count.matrix, count.matrix.normalized = count.matrix.normalized, specs=specs)
+  return (result)
+}
+```
+
+
+```{r}
+DE_fit_quantile_with_batch <- function(count.matrix, count.matrix.normalized, specs){
+  y       <- DGEList(counts = count.matrix)  
+  keep    <- filterByExpr(y, min.count=1)
+  y       <- y[keep,,keep.lib.sizes=F]
+  y       <- calcNormFactors(object = y, method = "none")
+  group   <- factor(paste(specs$TYPE,specs$AGE,sep="."))
+  
+  design  <- model.matrix(~0+group)
+  mod0 <- cbind(rep(1, length(group)))
+  
+  rownames(design) <- colnames(count.matrix)
+  colnames(design) <- gsub("group", "", colnames(design))
+  
+  sva.res <-
+    sva::svaseq(count.matrix.normalized , design, mod0)
+  
+  # batch effect additional matrix
+  add.batch <- sva.res$sv
+  
+  # make the colnames prettier just for fun
+  colnames(add.batch) <- paste0("SV", c(1:ncol(add.batch)))
+  
+  # add it to the design matrix
+  design <-
+    cbind(design, add.batch)
+  
+  
+  v       <- voom(y,design, normalize.method ="quantile")
+  fit     <- lmFit(v, design)
+  fit$aveLogCPM    <- aveLogCPM(count.matrix)
+  return (fit)
+} 
+```
+
+```{r DE_test_quantile}
+DE_test_quantile <- function (fit, contrast){
+  contrasts.age_sex_str <- makeContrasts(
+    Age18vs3_B6  = (B6.18  - B6.3),
+    Age18vs3_NZO = (NZO.18 - NZO.3),
+    levels = fit$design)
+  
+  tmp <- contrasts.fit(fit, contrasts.age_sex_str[, contrast])
+  tmp <- eBayes(tmp)
+  return (tmp)
+}
+```
+
+```{r DE_toptags_quantile}
+DE_toptags_quantile <- function (tmp, sort.by = "p", n = Inf, p.value = 1, lfc = 0){
+  top.table <- topTable(tmp, sort.by = sort.by, n = Inf, p.value = p.value, lfc = lfc)
+  return(top.table)
+}
+```
+
+```{r Geneset Enrichment Analyses}
+gsea <- function(top.table, tissue_cell_type, contrast){
+  
+  # use logFC as phenotype of interest
+  ranks <- top.table$logFC
+  
+  # make the gene names
+  names(ranks) <- rownames(top.table)
+  
+  gsea.result <- lapply(selected_genesets_gsea, function(pathways){
+    fgsea(pathways, ranks, minSize=15, maxSize = 500, nperm=1000)
+  })
+  
+  gsea.list <- map_df(gsea.result, ~as.data.frame(.x), .id="Geneset")
+  gsea.list$Contrast <- contrast
+  gsea.list$TCT <- tissue_cell_type
+  return(gsea.list)
+}
+```
+
+
+```{r check_genesets}
+check_genesets <- function (top.table, tissue_cell_type, contrast, union_size = 20e3){
+  
+  
+  # Up regulated genes specs
+  genes_up_tbl <- top.table[top.table$logFC > 0,]
+  # Down regulated genes specs
+  genes_dw_tbl <- top.table[top.table$logFC < 0,]
+  
+  # Change between TMM and Quantile fitting
+  loc_up <- match(c("P.Value","adj.P.Val"), colnames(genes_up_tbl))
+  if(!is.na(loc_up[1])) {
+    colnames(genes_up_tbl)[c(loc_up)] <- c("PValue","FDR")
+    colnames(genes_dw_tbl)[c(loc_up)] <- c("PValue","FDR")
+  }
+  
+  # These are mice gene names which are differentially expressed.
+  genes_up   <- genes_up_tbl %>% rownames
+  genes_down <- genes_dw_tbl %>% rownames
+  
+  # create an empty dataframe for enriched modules,
+  # so that later we can sort them and prepare excel tables, yey!
+  enriched_modules_df <- data.frame()
+  
+  # for each geneset, iterate each module
+  for (i in 1:length(selected_genesets_mice)){
+    
+    geneset_name <- names(selected_genesets_mice)[[i]]
+    
+    if (geneset_name == "wp_inflammation"){
+      modules <- selected_genesets_mice[[i]]
+      
+      module_names <- selected_genesets_labels[["wp"]]
+      module_names <-module_names [module_names$Module.ID %in% modules$Module.ID,]
+      
+      modules <-  merge(modules, module_names, by = "Module.ID")
+    } else {
+      
+      module_names <- selected_genesets_labels[[i]]
+      modules      <- selected_genesets_mice  [[i]]
+      modules     <- merge(modules, module_names, by = "Module.ID")
+    }
+    
+    # here we create empty p values, geneset name vectors so that we can adjust p values later
+    module_count        <- nrow(module_names)
+    vector_module_names <- vector_geneset_names <- character(module_count)
+    vector_overlap_ratio_up <- vector_overlap_ratio_dw <- vector_p_up <- vector_p_down <- 
+      numeric(module_count) 
+    # iterate the modules
+    
+    cat ("Geneset Name:", geneset_name, "\n")
+    for (j in 1:nrow(module_names)){
+      
+      module_ID   <- module_names[j, "Module.ID"]
+      module_name <- module_names[j, "Module.Name"]
+      module      <- modules[modules$Module.ID %in% module_ID, "Gene.stable.ID"] 
+      
+      # module gene count (constant for up/down)
+      gene_count_module <- unique(module) %>% length
+      
+      # upregulated gene count
+      n_up <- length(genes_up) 
+      
+      # overlapped up-regulated genes with the module
+      q_up <- genes_up %in% module %>% sum
+      
+      # overlap ratio for upregulated genes with modules
+      overlap_ratio_up <- q_up / gene_count_module
+      
+      # here we calculate the probability of having a bigger intersection
+      # than the count of overlapping genes given the module size and the total gene count.
+      # we substract 1 for removing the equality when the lower.tail = F, which changes P(X<x) to 1-P(X>=x).
+      p_up <- phyper(q_up-1, gene_count_module, union_size - gene_count_module, n_up, lower.tail = F, log.p = F)
+      
+      # downregulated gene count
+      n_down <- length(genes_down)
+      
+      # overlapped down-regulated genes with the module
+      q_down <- genes_down %in% module %>% sum
+      
+      # overlap ratio for down regulated genes with modules
+      overlap_ratio_dw <- q_down / gene_count_module
+      
+      p_down <- phyper(q_down-1, gene_count_module, union_size - gene_count_module, n_down, lower.tail = F, log.p = F)
+      
+      vector_p_up[j]          <- p_up
+      vector_p_down[j]        <- p_down
+      vector_geneset_names[j] <- names(selected_genesets_mice)[[i]]
+      vector_module_names[j]  <- module_name
+      vector_overlap_ratio_up[j] <- overlap_ratio_up
+      vector_overlap_ratio_dw[j] <- overlap_ratio_dw
+    }
+    
+    df_up   <- data.frame(geneset.name = vector_geneset_names, 
+                          module.name = vector_module_names,
+                          overlap.ratio = vector_overlap_ratio_up,
+                          p = vector_p_up,
+                          stringsAsFactors = F)
+    
+    df_down <- data.frame(geneset.name = vector_geneset_names, 
+                          module.name = vector_module_names,
+                          overlap.ratio = vector_overlap_ratio_dw,
+                          p = vector_p_down,
+                          stringsAsFactors = F)
+    
+    # adjust the p-values for each module
+    df_up$adj.p   <- p.adjust(p = df_up$p  , method = "fdr")
+    df_down$adj.p <- p.adjust(p = df_down$p, method = "fdr")
+    
+    # sort according to adjusted p-values and then to p-values
+    df_up   <- df_up  [order(df_up$adj.p  , df_up$p)  ,]
+    df_down <- df_down[order(df_down$adj.p, df_down$p),]
+    
+    # this is an important parameter since it affects the number of modules that are chosen
+    fdr.threshold <- 1
+    
+    # check if any modules are enriched for up regulated genes
+    if (any(df_up$adj.p < fdr.threshold)){
+      
+      # take the enriched modules
+      enriched_modules <- df_up[df_up$adj.p <= fdr.threshold,]
+      
+      # add enriched modules to dataframe
+      enriched_modules_df <- cbind(TCT = tissue_cell_type, 
+                                   Contrast = contrast, 
+                                   enriched_modules,
+                                   Status="Up",
+                                   Overlapping.Genes = NA) %>% rbind(enriched_modules_df)
+      
+      for (k in 1:nrow(enriched_modules)){
+        
+        enriched_module_name   <- enriched_modules[k, "module.name"]
+        # Select the genes from modules that are overlapping with up regulated genes for enriched modules
+        enriched_modules_df$Overlapping.Genes[k] <- 
+          with(modules, Gene.stable.ID[Gene.stable.ID %in% genes_up & Module.Name %in% enriched_module_name]) %>%
+          paste(collapse = ",")
+      } # for k
+    } # if 
+    
+    # check if any modules are enriched for down regulated genes
+    # To-Do: I know I should make this a function...
+    if (any(df_down$adj.p < fdr.threshold)){
+      
+      # take the enriched modules
+      enriched_modules <- df_down[df_down$adj.p <= fdr.threshold,]
+      
+      # add enriched modules to dataframe
+      enriched_modules_df <- cbind(TCT = tissue_cell_type, 
+                                   Contrast = contrast, 
+                                   enriched_modules,
+                                   Status = "Down",
+                                   Overlapping.Genes = NA) %>% rbind(enriched_modules_df)
+      
+      for (k in 1:nrow(enriched_modules)){
+        
+        enriched_module_name   <- enriched_modules[k, "module.name"]
+        # Select the genes from modules that are overlapping with up regulated genes for enriched modules
+        enriched_modules_df$Overlapping.Genes[k] <- 
+          with(modules, Gene.stable.ID[Gene.stable.ID %in% genes_down & Module.Name %in% enriched_module_name]) %>% 
+          paste(collapse = ",")
+      } # for k
+    } # if 
+  } # for i
+  if (nrow(enriched_modules_df) == 0) return (NULL)
+  return (enriched_modules_df)
+}
+```
+
+```{r enrichment_plots}
+# PATH: path of the enriched modules files
+# PATH_TO_SAVE:  
+er_plot <- function(path, path_to_save, gsea = F){
+  
+  file_list <- list.files(path)
+  all_modules <- lapply(file_list, function(x){
+    read.csv(paste0(path, x), stringsAsFactors = F) %>% data.frame
+  })
+  
+  df <- do.call("rbind", all_modules)
+  df$TCT[df$TCT == "naive"] <- "CD8+ Naive"
+  df$TCT[df$TCT == "memory"] <- "CD8+ Memory"
+  
+  if (gsea){
+    for (var in unique(df$Geneset)){
+      
+      plot.df <- df[ df$Geneset == var,]
+      
+      # if (var == "vp2008"){
+      #   plot.df <- cleannames(plot.df)
+      # }
+      p <- ggplot( plot.df, 
+                   aes(x=pathway, 
+                       y=Contrast, 
+                       color = ifelse(sign(NES %>% as.numeric) < 0, "Negative", "Positive"),
+                       size = ifelse(pval < 0.1, (-log10(pval %>% as.numeric)), NA)
+                   )
+      ) +
+        xlab("") + ylab("") + 
+        geom_point() + 
+        coord_flip() +
+        facet_wrap(~TCT) + 
+        scale_color_manual(values=c("#2166ACFF","#B2182BFF")) + 
+        scale_y_discrete(name ="Strains", breaks=c("Age18vs3_B6","Age18vs3_NZO"),labels=c("B6", "NZO")) +
+        theme_minimal(base_size = 16) + labs(color = "Sign", size = "-log10(p)")
+      
+      if (var == 'wp'){
+        width_ = 20
+        height_ = 20
+      } else if(var == "wp_inflammation"){
+        width_ = 12
+        height_ = 10
+      }else {
+        width_ = 6.5
+        height_ = 6
+      }
+      ggsave(paste0(path_to_save, "GSEA_", var, '.pdf'),
+             plot = p,
+             units = "in",
+             width = width_,
+             height = height_,
+             useDingbats = FALSE)
+    }
+    
+  } else{
+    for (var in unique(df$geneset.name)){
+      p <- ggplot(
+        df[df$geneset.name == var, ] %>%
+          mutate(Status = factor(Status)),
+        aes(
+          x = module.name,
+          y = Contrast,
+          color = Status,
+          size = ifelse(adj.p < 0.25, (-log10(adj.p %>% as.numeric)), NA)
+        )
+      ) +
+        xlab("") + ylab("") +
+        geom_point() +
+        coord_flip() +
+        facet_wrap( ~ TCT) +
+        scale_color_manual(values = c("#2166ACFF", "#B2182BFF")) +
+        scale_y_discrete(
+          name = "",
+          breaks = c("Age18vs3_B6", "Age18vs3_NZO"),
+          labels = c("B6", "NZO")
+        ) +
+        theme_minimal(base_size = 16) +
+        labs(color = "Regulation", size = "-log10(p)") +
+        theme(axis.text = element_text(color = "black"))
+      
+      if (var == 'wp'){
+        width_ = 20
+        height_ = 20
+      } else if(var == "wp_inflammation"){
+        width_ = 12
+        height_ = 10
+      }else {
+        width_ = 6.5
+        height_ = 6
+      }
+      ggsave(paste0(path_to_save, var, '.pdf'),
+             plot = p,
+             units = "in",
+             width = width_,
+             height = height_,
+             useDingbats = FALSE)
+    } # for
+  } # else
+  
+}
+```
+
+```{r}
+load("analysis/cache/enrichment_analysis.Rdata")
+load("data/genesets/Wikipathways/Wiki_inflammation.rda")
+
+cd8_list <- c("naive", "memory")
+
+
+wp <- selected_genesets_mice$wp
+
+wp.inflammation <-wp[wp$Module.ID %in% unique(wp.inflammation$Module.ID),]
+
+selected_genesets_mice[["wp_inflammation"]] <- wp.inflammation
+
+lapply(cd8_list, function(tissue_cell_type) {
+  results <- preprocess_data(tissue_cell_type)
+  
+  cm <- results$count.matrix
+  cm.norm <- results$count.matrix.normalized
+  specs <- results$specs
+  
+  fit <- DE_fit_quantile_with_batch(cm, cm.norm, specs)
+  
+  contrasts <- c("Age18vs3_B6", "Age18vs3_NZO")
+  er_modules_list <-
+    lapply(contrasts, function(contrast, tissue_cell_type) {
+      cat (paste0("For ", contrast, ":\n"))
+      tmp       <- DE_test_quantile(fit, contrast)
+      top.table <- DE_toptags_quantile(tmp, p.value = 1)
+      write.csv(
+        x = top.table,
+        file = paste0(
+          "output/F4/DE_genes/Batch_Corrected_ALL_genes_",
+          toupper(tissue_cell_type),
+          "_",
+          contrast,
+          "_RNAseq.csv"
+        )
+      )
+      
+      gsea.results <-
+        suppressWarnings(gsea(top.table, tissue_cell_type, contrast))
+      
+      top.table <-
+        DE_toptags_quantile(tmp, p.value = 0.05, lfc = 1)
+      write.csv(
+        x = top.table,
+        file = paste0(
+          "output/F4/DE_genes/Batch_Corrected_DE_genes_",
+          toupper(tissue_cell_type),
+          "_",
+          contrast,
+          "_RNAseq.csv"
+        )
+      )
+      
+      if (!is.null(top.table)) {
+        cat (paste0("\tupreg_genes ----",   top.table[top.table$logFC > 0, ] %>% nrow))
+        cat (paste0("\tdownreg_genes ----", top.table[top.table$logFC < 0, ] %>% nrow, "\n"))
+        
+        er_modules <-
+          
+          check_genesets(top.table, tissue_cell_type, contrast)
+        return (list(gsea.results = gsea.results, er_modules = er_modules))
+      }
+    }, tissue_cell_type = tissue_cell_type)
+  
+  
+  # make the list a table!
+  er_modules <-
+    sapply(er_modules_list, function(x) {
+      x["er_modules"]
+    })
+  er_modules <- do.call("rbind", er_modules)
+  filename_er_modules <-
+    paste0(
+      "output/F4/Enrichment Files/Hypergeometric/RNAseq/",
+      tissue_cell_type,
+      "_er_summary.csv"
+    )
+  write.csv(er_modules, file = filename_er_modules)
+  
+  # get GSEA modules
+  gsea.modules <-
+    sapply(er_modules_list, function(x) {
+      x["gsea.results"]
+    })
+  gsea.modules <- do.call("rbind", gsea.modules)
+  gsea.modules$leadingEdge <-
+    sapply(gsea.modules$leadingEdge, function(x) {
+      paste(x, collapse = ",")
+    })
+  filename_gsea_modules <-
+    paste0(
+      "output/F4/Enrichment Files/GSEA/RNAseq/",
+      tissue_cell_type,
+      "_gsea_summary.csv"
+    )
+  
+  write.csv(gsea.modules, file = filename_gsea_modules)
+  return(fit)
+})
+```
+
+```{r CD8+ Mice Batch corrected enrichment plots}
+# PART 4
+er_plot("output/F4/Enrichment Files/Hypergeometric/RNAseq/", "output/F4/Enrichment Figures/RNAseq/Batch_Corrected_")
+
+# PART 5 
+er_plot("output/F4/Enrichment Files/GSEA/RNAseq/", "output/F4/Enrichment Figures/RNAseq/Batch_Corrected_", gsea = T)
+```
+
+```{r}
+load("analysis/cache/enrichment_analysis.Rdata")
+load("data/genesets/Wikipathways/Wiki_inflammation.rda")
+
+wp <- selected_genesets_gsea$wp
+
+wp.inf <- wp[unique(wp.inflammation$Module.Name)]
+
+
+fileroot <-"output/F4/DE_genes/"
+DEfiles <- list.files(fileroot)
+DEfiles.rna <- DEfiles[grepl("*RNAseq*",DEfiles)]
+
+DEfiles.rna.naive <- DEfiles.rna[grepl("*NAIVE*",DEfiles.rna)]
+
+up.genes <- lapply(DEfiles.rna.naive, function(x){
+  rnafile <- read.csv(paste0(fileroot,x))
+  rnafile.up <- rnafile [rnafile$logFC > 0,]
+  return(rnafile.up$X)
+})
+up.genes.inter <- Reduce(intersect, up.genes)
+
+res.naive <- cinaR::HPEA(up.genes.inter, wp.inf, background.genes.size = 20e3)
+
+
+# MEMORY
+DEfiles.rna.memory <- DEfiles.rna[grepl("*MEMORY*",DEfiles.rna)]
+
+up.genes <- lapply(DEfiles.rna.memory, function(x){
+  rnafile <- read.csv(paste0(fileroot,x))
+  rnafile.up <- rnafile [rnafile$logFC > 0,]
+  return(rnafile.up$X)
+})
+up.genes.inter <- Reduce(intersect, up.genes)
+res.memory <- cinaR::HPEA(up.genes.inter, wp.inf, background.genes.size = 20e3)
+```
+
+```{r}
+fileroot <-"output/F4/DE_genes/"
+DEfiles <- list.files(fileroot)
+DEfiles.atc <- DEfiles[grepl("*ATAC*",DEfiles)]
+
+up.genes <- lapply(DEfiles.atc, function(x){
+  rnafile <- read.csv(paste0(fileroot,x))
+  rnafile.up <- rnafile [rnafile$logFC > 0,]
+  return(rnafile.up$Nearest.Ensembl)
+})
+up.genes.inter <- Reduce(intersect, up.genes)
+
+dw.genes <- lapply(DEfiles.atc, function(x){
+  rnafile <- read.csv(paste0(fileroot,x))
+  rnafile.dw <- rnafile [rnafile$logFC < 0,]
+  return(rnafile.dw$Nearest.Ensembl)
+})
+dw.genes.inter <- Reduce(intersect, dw.genes)
+
+
+load("analysis/cache/enrichment_analysis.Rdata")
+load("data/genesets/Wikipathways/Wiki_inflammation.rda")
+
+wp <- selected_genesets_gsea$wp
+
+wp.inf <- wp[unique(wp.inflammation$Module.Name)]
+
+res <- cinaR::HPEA(up.genes.inter, wp.inf, background.genes.size = 20e3)
+res <- cinaR::HPEA(dw.genes.inter, wp.inf, background.genes.size = 20e3)
+```
+

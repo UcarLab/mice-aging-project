@@ -1,0 +1,1158 @@
+---
+title: "Figure 4 Results Comparisons"
+author: "EO Karakaslar"
+date: "11/20/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+require(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+opts_knit$set(root.dir = "/Users/karako/Dropbox (JAX)/MouseAging_clean/NatureAgingSubmission/") #set root dir!
+# setwd("~/Dropbox (JAX)/MouseAging_clean")
+```
+
+```{r libraries}
+library(readr)
+library(VennDiagram)
+library(ggplot2)
+library(gmp)
+library(grDevices)
+library(ggpmisc)
+
+
+source("code/color_values.R")
+```
+
+
+```{r}
+de.memory.atac <- read_csv("output/F3/DE Genes/DE_genes_MEMORY_Age18vs3_NZO_ATACseq.csv")
+de.memory.atac2 <- read_csv("output/F4/DE_genes/Batch_Corrected_DE_genes_MEMORY_Age18vs3_NZO_ATACseq.csv")
+
+de.mem.atac.up <- de.memory.atac[de.memory.atac$logFC > 0, ]
+de.mem.atac.dw <- de.memory.atac[de.memory.atac$logFC < 0, ]
+
+de.memory.atac2.up <- de.memory.atac2[de.memory.atac2$logFC > 0, ]
+de.memory.atac2.dw <- de.memory.atac2[de.memory.atac2$logFC < 0, ]
+
+venn.diagram(
+  
+  x = list(de.mem.atac.up$Nearest.Ensembl, de.memory.atac2.up$Nearest.Ensembl),
+  category.names =  c("Non-batch" , "Batch-corrected"),
+  filename = 'F4/Results_Comparison/Batch_comparison/memory_atac_nzo_batch_up_vs_nonbatch_up.png', 
+  hyper.test = T
+)
+
+
+venn.diagram(
+  
+  x = list(de.mem.atac.dw$Nearest.Ensembl, de.memory.atac2.dw$Nearest.Ensembl),
+  category.names = c("Non-batch" , "Batch-corrected"),
+  filename = 'output/F4/Results_Comparison/Batch_comparison/memory_atac_nzo_batch_down_vs_nonbatch_down.png'
+  
+)
+```
+
+
+```{r PBL/SPEEN RNA and ATAC comparison}
+# This will be probably Figure 3B or something.
+
+tcts <- c("PBL", "SPLEEN")
+strains <- c("B6", "NZO")
+
+
+
+a <- lapply(tcts, function(tct){
+  res <- lapply(strains, function(strain){
+    
+    # Load RNA and ATAC results
+    atc.genes <- read.csv(paste0("output/F3/DE genes/DE_genes_",tct,"_Age18vs3_",strain,"_ATACseq.csv"))
+    rna.genes <- read.csv(paste0("output/F3/DE genes/DE_genes_",tct,"_Age18vs3_",strain,"_RNAseq.csv"))
+    
+    rna.genes.up <- rna.genes[rna.genes$logFC > 0,]
+    rna.genes.dw <- rna.genes[rna.genes$logFC < 0,]
+    
+    atc.genes.up <- atc.genes[atc.genes$logFC > 0,]
+    atc.genes.dw <- atc.genes[atc.genes$logFC < 0,]
+    
+    
+    myCol <- c(color_values["Up"], color_values["Down"])
+    
+    p.hyper <- function(rna.genes, atc.genes){
+      
+      q <- length(intersect(rna.genes, atc.genes))
+      
+      m <- length(rna.genes)
+      k <- length(atc.genes)
+        
+      p.val <- phyper(q-1, m, 20e3 - m, k, lower.tail = F, log.p = F)
+      return(p.val)
+    }
+    
+    new.venn <- function(rna.genes, atc.genes, output.file, color.values){
+      
+      
+      
+      temp <- venn.diagram(x = list(rna.genes, atc.genes),
+                 filename = NULL, 
+                 category.names = c("", ""), 
+                 
+                 hyper.test = TRUE, 
+                 lower.tail = FALSE,
+                 total.population = 20e3, 
+              
+                 lwd = 2,
+                 lty = 'blank',
+                 fill = color.values, 
+                 
+                 cex = 3,
+                 # fontface = "bold",
+                 fontfamily = "sans",
+                 
+                 # Set names
+                 cat.cex = 1.2,
+                 cat.fontface = "bold",
+                 cat.default.pos = "outer",
+                 cat.pos = c(180, 180),
+                 cat.dist = c(0.01, 0.01),
+                 cat.fontfamily = "sans",
+                 #rotation = 1
+                 
+                 # Subtext
+                 sub.pos = c(0.5,0.05), 
+                 sub.fontfamily = "sans",
+                 sub.cex = 3,
+                 )
+      pdf(file=output.file, useDingbats = FALSE)
+          grid.draw(temp)
+      dev.off()
+      
+      p.val <- p.hyper(rna.genes, atc.genes)
+      return(p.val)
+    }
+    
+    base.filename <- paste0("output/F3/Gene and Peak Counts/Venn_Diagrams/", tct, "_", strain)
+    
+    # RNA-UP vs ATAC-UP
+    p.up.up <- new.venn(rna.genes.up$X, atc.genes.up$Nearest.Ensembl, 
+             output.file = paste0(base.filename, "_rna_up_atac_up.pdf"),
+             color.values = myCol)
+    
+    # RNA-UP vs ATAC-DOWN
+    p.up.dw <- new.venn(rna.genes.up$X, atc.genes.dw$Nearest.Ensembl, 
+             output.file = paste0(base.filename, "_rna_up_atac_down.pdf"),
+             color.values = myCol)
+    
+    # RNA-DOWN vs ATAC-UP
+    p.dw.up <- new.venn(rna.genes.dw$X, atc.genes.up$Nearest.Ensembl, 
+             output.file = paste0(base.filename, "_rna_down_atac_up.pdf"),
+             color.values = myCol)
+    
+    # RNA-DOWN vs ATAC-DOWN
+    p.dw.dw <- new.venn(rna.genes.dw$X, atc.genes.dw$Nearest.Ensembl, 
+             output.file = paste0(base.filename, "_rna_down_atac_down.pdf"),
+             color.values = myCol)
+    
+    return(c(p.up.up, p.up.dw, p.dw.up, p.dw.dw))
+  })
+  
+  names(res) <- strains
+  return(res)
+})
+
+names(a) <- tcts
+
+mm <- matrix(unlist(a, use.names = F), nrow = 4, ncol = 4) %>% t
+colnames(mm) <- c("UP-OPENING", "UP-CLOSING", "DOWN-OPENING", "DOWN-CLOSING")
+rownames(mm) <- c("PBL - B6", "PBL - NZO", "SPLEEN - B6", "SPLEEN - NZO")
+
+library(RColorBrewer)
+
+pdf("output/F3/Gene and Peak Counts/Pheatmap_RNA_ATAC_intersections_p_values.pdf", width = 5, height = 3)
+pheatmap.intersections <- pheatmap::pheatmap(-log(mm), 
+                   cluster_cols = F, cluster_rows = F, border_color = "white", display_numbers = T,number_color = "black",fontsize_number = 8,
+                   color = colorRampPalette(brewer.pal(8, "Blues"))(50), angle_col = 0, fontsize = 7)
+dev.off()
+```
+
+
+```{r Mice CD8+ Memory RNA/ATAC LogFC Comparisons}
+strains <- c("B6", "NZO")
+cell.types <- c("MEMORY", "NAIVE")
+
+plot.list <- lapply(strains, function(x) {
+  p <- lapply(cell.types, function(y) {
+    atc.data <-
+      read.csv(
+        paste0(
+          "output/F4/DE_genes/Batch_Corrected_ALL_genes_",
+          y,
+          "_Age18vs3_",
+          x,
+          "_ATACseq.csv"
+        )
+      )
+    rna.data <-
+      read.csv(
+        paste0(
+          "output/F4/DE_genes/Batch_Corrected_ALL_genes_",
+          y,
+          "_Age18vs3_",
+          x,
+          "_RNAseq.csv"
+        )
+      )
+    
+    plot.df <-
+      merge(atc.data[, c("Nearest.Ensembl", "Gene.Name", "logFC", "adj.P.Val")], rna.data[, c("X", "logFC", "adj.P.Val")],
+            by.x = "Nearest.Ensembl", by.y = "X")
+    
+    plot.df.filtered <- 
+    plot.df[  (abs(plot.df$logFC.x) > 1)   & 
+              (abs(plot.df$logFC.y) > 1)   & 
+              (plot.df$adj.P.Val.x < 0.05) &
+              (plot.df$adj.P.Val.y < 0.05),]
+      
+    
+    formula <- y ~ poly(x, 1, raw = TRUE)
+    p <-
+      ggplot(plot.df.filtered, aes(logFC.x, logFC.y)) + 
+      geom_point(alpha = 0.2) + coord_fixed() +
+      xlim(c(-8, 8))  + ylim(c(-8, 8)) + xlab("ATAC-seq") + ylab("RNA-seq") + 
+      ggtitle(paste0(x, " ", y)) +
+      geom_smooth(
+        method = "lm",
+        se = FALSE,
+        size = 1,
+        formula = formula,
+        na.rm = TRUE, 
+        color = "darkgray"
+      ) + stat_poly_eq(formula = formula, parse = TRUE)
+    
+    return(p)
+  })
+  return(p)
+}) %>% unlist(recursive = F)
+
+pdf("output/F4/Mice_CD8_logFC_comparisons_DE_Genes.pdf", width = 8, height = 8, useDingbats = F)
+ggarrange(plotlist = plot.list, nrow = 2, ncol = 2, common.legend = T )
+dev.off()
+```
+
+```{r Mice CD8+ RNA ATAC DE Genes Venn comparison}
+tcts <- c("MEMORY", "NAIVE")
+strains <- c("B6", "NZO")
+
+a <- lapply(tcts, function(tct){
+  res <- lapply(strains, function(strain){
+    
+    # Load RNA and ATAC results
+    atc.genes <- read.csv(paste0("output/F4/DE_genes/Batch_Corrected_DE_genes_",tct,"_Age18vs3_",strain,"_ATACseq.csv"))
+    message("Read:", paste0("output/F4/DE_genes/Batch_Corrected_DE_genes_",tct,"_Age18vs3_",strain,"_ATACseq.csv"),
+            "\nSize:", nrow(rna.genes))
+    rna.genes <- read.csv(paste0("output/F4/DE_genes/Batch_Corrected_DE_genes_",tct,"_Age18vs3_",strain,"_RNAseq.csv"))
+    message("Read:", paste0("output/F4/DE_genes/Batch_Corrected_DE_genes_",tct,"_Age18vs3_",strain,"_RNAseq.csv"),
+            "\nSize:", nrow(rna.genes))
+    
+    rna.genes.up <- rna.genes[rna.genes$logFC > 0,]
+    rna.genes.dw <- rna.genes[rna.genes$logFC < 0,]
+    
+    atc.genes.up <- atc.genes[atc.genes$logFC > 0,]
+    atc.genes.dw <- atc.genes[atc.genes$logFC < 0,]
+    
+    
+    myCol <- c(color_values["Up"], color_values["Down"])
+    
+    p.hyper <- function(rna.genes, atc.genes){
+      
+      q <- length(intersect(rna.genes, atc.genes))
+      
+      m <- length(rna.genes)
+      k <- length(atc.genes)
+        
+      p.val <- phyper(q-1, m, 20e3 - m, k, lower.tail = F, log.p = F)
+      return(p.val)
+    }
+    
+    new.venn <- function(rna.genes, atc.genes, output.file, color.values){
+      
+      
+      
+      temp <- venn.diagram(x = list(rna.genes, atc.genes),
+                 filename = NULL, 
+                 category.names = c("", ""), 
+                 
+                 hyper.test = TRUE, 
+                 lower.tail = FALSE,
+                 total.population = 20e3, 
+              
+                 lwd = 2,
+                 lty = 'blank',
+                 fill = color.values, 
+                 
+                 cex = 3,
+                 # fontface = "bold",
+                 fontfamily = "sans",
+                 
+                 # Set names
+                 cat.cex = 1.2,
+                 cat.fontface = "bold",
+                 cat.default.pos = "outer",
+                 cat.pos = c(180, 180),
+                 cat.dist = c(0.01, 0.01),
+                 cat.fontfamily = "sans",
+                 #rotation = 1
+                 
+                 # Subtext
+                 sub.pos = c(0.5,0.05), 
+                 sub.fontfamily = "sans",
+                 sub.cex = 3,
+                 )
+      pdf(file=output.file, useDingbats = FALSE)
+          grid.draw(temp)
+      dev.off()
+      
+      p.val <- p.hyper(rna.genes, atc.genes)
+      return(p.val)
+    }
+    
+    base.filename <- paste0("output/F4/Gene and Peak Counts/Venn_Diagrams/", tct, "_", strain)
+    
+    # RNA-UP vs ATAC-UP
+    p.up.up <- new.venn(rna.genes.up$X, atc.genes.up$Nearest.Ensembl, 
+             output.file = paste0(base.filename, "_rna_up_atac_up.pdf"),
+             color.values = myCol)
+    
+    # RNA-UP vs ATAC-DOWN
+    p.up.dw <- new.venn(rna.genes.up$X, atc.genes.dw$Nearest.Ensembl, 
+             output.file = paste0(base.filename, "_rna_up_atac_down.pdf"),
+             color.values = myCol)
+    
+    # RNA-DOWN vs ATAC-UP
+    p.dw.up <- new.venn(rna.genes.dw$X, atc.genes.up$Nearest.Ensembl, 
+             output.file = paste0(base.filename, "_rna_down_atac_up.pdf"),
+             color.values = myCol)
+    
+    # RNA-DOWN vs ATAC-DOWN
+    p.dw.dw <- new.venn(rna.genes.dw$X, atc.genes.dw$Nearest.Ensembl, 
+             output.file = paste0(base.filename, "_rna_down_atac_down.pdf"),
+             color.values = myCol)
+    
+    return(c(p.up.up, p.up.dw, p.dw.up, p.dw.dw))
+  })
+  
+  names(res) <- strains
+  return(res)
+})
+
+names(a) <- tcts
+
+mm <- unlist(a, recursive = F) %>% do.call(rbind, .)
+
+colnames(mm) <- c("UP-OPENING", "UP-CLOSING", "DOWN-OPENING", "DOWN-CLOSING")
+rownames(mm) <- c("MEMORY - B6", "MEMORY - NZO", "NAIVE - B6", "NAIVE - NZO")
+
+library(RColorBrewer)
+
+pdf("output/F4/Gene and Peak Counts/Pheatmap_RNA_ATAC_intersections_p_values.pdf", width = 5, height = 3)
+pheatmap.intersections <- pheatmap::pheatmap(-log(mm), 
+                   cluster_cols = F, cluster_rows = F, border_color = "white", display_numbers = T,number_color = "black",fontsize_number = 8,
+                   color = colorRampPalette(brewer.pal(8, "Blues"))(50), angle_col = 0, fontsize = 7)
+dev.off()
+```
+
+```{r Mice CD8+ Enrichments for same directioned peaks/genes}
+load("data/genesets/Wikipathways/Wiki_inflammation.rda")
+load("data/genesets/selected_genesets.Rdata")
+
+source("code/color_values.R")
+
+wp <- selected_genesets_mice$wp
+wp.label <- selected_genesets_labels$wp
+
+wp <- merge(wp, wp.label, by = "Module.ID")
+
+wp.inflammation.ensembl <- wp[wp$Module.ID %in% wp.inflammation$Module.ID, ]
+
+wp.inflammation.ensembl <- split(wp.inflammation.ensembl$Gene.stable.ID, wp.inflammation.ensembl$Module.Name) 
+
+
+strains <- c("B6", "NZO")
+cell.types <- c("MEMORY", "NAIVE")
+
+# x <- "B6"; y <- "MEMORY"
+
+plot.list <- lapply(strains, function(x) {
+  p <- lapply(cell.types, function(y) {
+    atc.data <-
+      read.csv(
+        paste0(
+          "output/F4/DE_genes/Batch_Corrected_ALL_genes_",
+          y,
+          "_Age18vs3_",
+          x,
+          "_ATACseq.csv"
+        )
+      )
+    rna.data <-
+      read.csv(
+        paste0(
+          "output/F4/DE_genes/Batch_Corrected_ALL_genes_",
+          y,
+          "_Age18vs3_",
+          x,
+          "_RNAseq.csv"
+        )
+      )
+    
+    plot.df <-
+      merge(atc.data[, c("Nearest.Ensembl", "Gene.Name", "logFC", "adj.P.Val")], 
+            rna.data[, c("X", "logFC", "adj.P.Val")],
+            by.x = "Nearest.Ensembl", by.y = "X")
+    
+    plot.df.filtered <- 
+    plot.df[((abs(plot.df$logFC.x) > 0) & (plot.df$adj.P.Val.x < 0.05)) |
+            ((abs(plot.df$logFC.y) > 0) & (plot.df$adj.P.Val.y < 0.05)),]
+    
+    plot.df.filtered <- 
+    plot.df.filtered[sign(plot.df.filtered$logFC.x) == sign(plot.df.filtered$logFC.y),]
+    
+    
+    up.reg <- plot.df.filtered[plot.df.filtered$logFC.x > 0,]
+    dw.reg <- plot.df.filtered[plot.df.filtered$logFC.x < 0,]
+    
+    res.up <- cinaR::HPEA(genes = up.reg$Nearest.Ensembl, 
+                          geneset = wp.inflammation.ensembl, 
+                          background.genes.size = 20e3)
+    res.dw <- cinaR::HPEA(genes = dw.reg$Nearest.Ensembl, 
+                        geneset = wp.inflammation.ensembl, 
+                        background.genes.size = 20e3)
+    
+    return(rbind( cbind(res.up, status = "up"), 
+                  cbind(res.dw, status = "down")))
+    
+  })
+  names(p) <- cell.types
+  return(p)
+})
+
+names(plot.list) <- strains
+
+a <- lapply(plot.list, function(x){bind_rows(x, .id = "TCT")})
+plot.df <- bind_rows(a, .id = "Strain")
+
+plot.df$TCT <- factor(plot.df$TCT, levels = c("NAIVE", "MEMORY"), labels = c("Naive", "Memory"))
+
+write_xlsx(plot.df, "output/F4/Mice_CD8_same_direction_peaks_enrichments.xlsx")
+
+p.same.direction <- 
+  ggplot(plot.df %>% filter(adj.p < 0.05), 
+         aes(TCT, module.name, size = -log(adj.p), color = status)) + 
+  geom_point() + 
+  facet_wrap(~ Strain) + xlab("") + ylab("") +
+  labs(color = "Regulation", size = "-log10(p)") + 
+        theme(axis.text = element_text(color = "black")) +
+  scale_color_manual(values = color_values) +
+  theme_minimal(base_size = 16)
+
+ggsave(filename = "output/F4/Mice_CD8_same_direction_peaks_enrichments.pdf", 
+       width = 12, height = 6,
+       plot = p.same.direction)
+```
+
+```{r IL2 pathway}
+
+plot.df[plot.df$module.name == "IL-2 Signaling Pathway (WP49)", "overlapping.genes"]
+IL2.pathway <- wp[wp$Module.ID %in% "WP49",]
+
+load("data/RNAseq/F3_input/CPM Normalized Counts/rnaseq-expcount-cpm-memory.RData")
+load("data/RNAseq/F3_input/CPM Normalized Counts/rnaseq-expcount-cpm-naive.RData")
+
+il2.nai <- naive.cpm [rownames(naive.cpm)%in%IL2.pathway$Gene.stable.ID,]
+il2.mem <- memory.cpm[rownames(memory.cpm)%in%IL2.pathway$Gene.stable.ID,]
+
+pm.data <- cbind(il2.nai, il2.mem)
+
+sorted.IL2.genes <- IL2.pathway[match(rownames(pm.data), IL2.pathway$Gene.stable.ID),]
+
+rownames(pm.data) <- sorted.IL2.genes$GeneName
+
+meta.data <- colnames(pm.data) %>% strsplit(".", fixed = TRUE) %>% data.frame %>% t %>% data.frame(row.names = NULL)
+
+colnames(meta.data) <- c("Strain", "Age", "Sex", "TCT", "SampleID")
+
+meta.data$Age <- as.numeric(gsub("mo", "", meta.data$Age))
+meta.data$TCT[meta.data$TCT == "memory"] <- "CD8+ memory"
+meta.data$TCT[meta.data$TCT == "naive"] <- "CD8+ naive"
+meta.data$TCT <- factor(meta.data$TCT, levels = c("CD8+ naive", "CD8+ memory"))
+
+
+
+order.samples <- order(meta.data$Strain, meta.data$TCT, meta.data$Age)
+
+meta.ordered <- meta.data[order.samples,]
+pm.ordered <- pm.data[,order.samples]
+
+
+ann.col <- meta.ordered[,c("Age", "TCT","Strain")]
+rownames(ann.col) <- colnames(pm.ordered)
+
+
+ann_colors = list(
+    Strain = c(color_values["B6"], color_values["NZO"]),
+    Age = c(color_values["3"], color_values["12"], color_values["18"]),
+    TCT = c(color_values["CD8+ naive"], color_values["CD8+ memory"])
+)
+
+breaksList = seq(-3, 3, by = .001)
+
+pdf("output/F4/Heatmap_IL2_pathway_Mice_RNAseq.pdf", height = 6, width = 10)
+pheatmap(pm.ordered, scale = "row", 
+         breaks = breaksList,cluster_cols = F, annotation_col = ann.col, annotation_colors = ann_colors,
+         color = colorRampPalette(rev(brewer.pal(n = 9, name = "RdBu")))(length(breaksList)), 
+         border_color = "white", show_colnames = FALSE)
+dev.off()
+```
+
+
+
+```{r HPEA}
+#' HPEA
+#'
+#' @param genes DA gene names to be checked if they are over-represented or not.
+#' @param background.genes.size number of background genes for hyper-geometric p-value
+#' calculations. Default is 20,000.
+#' @param geneset Pathways to be used in enrichment analyses. If not set vp2008 (Chaussabel, 2008)
+#' immune modules will be used. This can be set to any geneset using `read.gmt` function from `qusage`
+#' package. Different modules are available: https://www.gsea-msigdb.org/gsea/downloads.jsp.
+HPEA <- function(genes, geneset, background.genes.size) {
+  res.hpea <- lapply(geneset, function(module) {
+    # Module gene count
+    k <- length(unique(module))
+
+    # gene count
+    n <- length(genes)
+
+    # overlapped up-regulated genes with the module
+    q <- sum(genes %in% module)
+
+
+    # here we calculate the probability of having a bigger intersection
+    # than the count of overlapping genes given the module size and the total gene count.
+    # we substract 1 for removing the equality when the lower.tail = F, which changes P(X<x) to 1-P(X>=x).
+    p.hyper <-
+      stats::phyper(q - 1,
+             k,
+             background.genes.size - k,
+             n,
+             lower.tail = F,
+             log.p = F)
+
+    # take the overlapping genes for the modules
+    og <- genes[genes %in% module]
+
+    module.overlapping.ratio <- length(og) / k
+
+    og <- ifelse(length(og) <= 0, "", paste(og, collapse = ","))
+
+
+    return(
+      data.frame(
+        p.val = p.hyper,
+        overlapping.genes = og,
+        module.overlapping.ratio = module.overlapping.ratio
+      )
+    )
+  })
+
+  res.hpea <- do.call(rbind, res.hpea)
+
+  res.hpea<- cbind(module.name = names(geneset), res.hpea)
+  res.hpea[, "adj.p"] <- stats::p.adjust(res.hpea[, "p.val"], method = "BH")
+
+  # sort according to adjusted p-values and then to p-values
+  res.hpea <-
+    res.hpea  [order(res.hpea[, "adj.p"], res.hpea[, "p.val"]), ]
+
+  return(res.hpea)
+}
+```
+
+
+
+```{r intersected memory genes across datasets}
+load("analysis/cache/enrichment_analysis.Rdata")
+
+mem.inter.up <- intersect(mem.atc.up$Nearest.Ensembl, mem.rna.up$X) 
+mem.inter.dw <- intersect(mem.atc.dw$Nearest.Ensembl, mem.rna.dw$X) 
+
+res.up <- HPEA(mem.inter.up, selected_genesets_gsea$wp, background.genes.size = 20e3)
+res.dw <- HPEA(mem.inter.dw, selected_genesets_gsea$wp, background.genes.size = 20e3)
+
+```
+
+```{r}
+# Load RNA and ATAC results
+naive.rna <- read.csv("output/F4/DE_genes/Batch_Corrected_DE_genes_NAIVE_Age18vs3_B6_RNAseq.csv")
+naive.atc <- read.csv("output/F4/DE_genes/Batch_Corrected_DE_genes_NAIVE_Age18vs3_B6_ATACseq.csv")
+
+naive.rna.up <- naive.rna[naive.rna$logFC > 0,]
+naive.rna.dw <- naive.rna[naive.rna$logFC < 0,]
+
+naive.atc.up <- naive.atc[naive.atc$logFC > 0,]
+naive.atc.dw <- naive.atc[naive.atc$logFC < 0,]
+
+naive.inter.up <- intersect(naive.atc.up$Nearest.Ensembl, naive.rna.up$X) 
+naive.inter.dw <- intersect(naive.atc.dw$Nearest.Ensembl, naive.rna.dw$X) 
+
+
+res.up <- HPEA(naive.inter.up, selected_genesets_gsea$wp, background.genes.size = 20e3)
+res.dw <- HPEA(naive.inter.dw, selected_genesets_gsea$wp, background.genes.size = 20e3)
+
+```
+
+```{r}
+gene2ens <- function(genes){
+  
+  genome <- annotables::grcm38
+  
+  # ens to gene symbol mapping
+  mapping <-
+    base::subset(genome,
+                 genome$symbol %in% genes,
+                 select = c('ensgene', 'symbol'))
+  
+    m <- match(genes, mapping$symbol)
+    
+    ens.genes <- mapping$ensgene[m]
+    names(ens.genes) <- genes
+    
+    return(ens.genes)
+}
+```
+
+```{r heatmap AP-1 Complex}
+ap1.genes <- c("Jun", "Junb", "Jund", "Fos", "Fosb", "Fra1" ,"Fra2", "Atf" ,"Atf2", "Atf3", "Atf4", "Atf5", "Atf6", "Atf6b", "Atf7", "Batf", "Batf2", "Batf3" , "Jdp2", "Maf", "Mafa", "Mafb", "Maff", "Mafg", "Mafk")
+
+ap1.genes.ens <- gene2ens(ap1.genes)
+
+load("data/RNAseq/F3_input/CPM Normalized Counts/rnaseq-expcount-cpm-memory.RData")
+
+existing.genes <- rownames(memory.cpm)[rownames(memory.cpm) %in% ap1.genes.ens]
+
+plot.df <- memory.cpm[existing.genes,]
+
+rownames(plot.df) <- names(ap1.genes.ens[ap1.genes.ens %in% existing.genes])
+
+meta.memory <- strsplit(colnames(memory.cpm), ".", fixed = T) %>% do.call(rbind,.) %>% as.data.frame
+colnames(meta.memory) <- c("Strain", "Age", "Sex", "TCT", "SampleID")
+
+meta.memory$Age <- factor(meta.memory$Age, levels = c("3mo", "18mo"))
+plot.order.memory <- order(meta.memory$Strain, meta.memory$Age)
+
+pheatmap(plot.df[,plot.order.memory], scale = "row", cluster_cols = F)
+```
+
+```{r naive AP1 complex}
+load("data/RNAseq/F3_input/CPM Normalized Counts/rnaseq-expcount-cpm-naive.RData")
+
+existing.genes <- rownames(naive.cpm)[rownames(naive.cpm) %in% ap1.genes.ens]
+
+plot.df <- naive.cpm[existing.genes,]
+
+rownames(plot.df) <- names(ap1.genes.ens[ap1.genes.ens %in% existing.genes])
+
+meta.naive <- strsplit(colnames(naive.cpm), ".", fixed = T) %>% do.call(rbind,.) %>% as.data.frame
+colnames(meta.naive) <- c("Strain", "Age", "Sex", "TCT", "SampleID")
+
+meta.naive$Age <- factor(meta.naive$Age, levels = c("3mo", "18mo"))
+plot.order.memory <- order(meta.naive$Strain, meta.naive$Age)
+
+pheatmap(plot.df[,plot.order.memory], scale = "row", cluster_cols = F)
+```
+
+```{r PCA plot Mice RNA-seq for AP1}
+ap1.genes <- c("Jun", "Junb", "Jund", "Fos", "Fosb", "Fra1" ,"Fra2", "Atf" ,"Atf2", "Atf3", "Atf4", "Atf5", "Atf6", "Atf6b", "Atf7", "Batf", "Batf2", "Batf3" , "Jdp2", "Maf", "Mafa", "Mafb", "Maff", "Mafg", "Mafk")
+
+length(ap1.genes)
+
+ap1.genes.ens <- gene2ens(ap1.genes)
+
+## Load Onur's data
+count.matrix <- read.csv('data/RNAseq/F1_input/rna_count_matrix.csv', row.names = 1, check.names = F, stringsAsFactors = F)
+
+# Order genes according to their standard deviation in decreasing order
+count.matrix <- count.matrix [rev(order(apply(count.matrix, 1, sd))),]
+
+# Remove duplicated genes
+count.matrix <- count.matrix [!duplicated(rownames(count.matrix)),]
+
+
+# Enforce all counts to be integers
+count.matrix <- round(count.matrix, 0)
+
+# remove low expressed genes      
+count.matrix <- count.matrix [rowSums(cpm(count.matrix) >= 0.5) >= 2,]
+
+# filter BM
+BM.loc <- colnames(count.matrix) %>% sapply(function(x){grepl("BM", x, fixed = TRUE)})
+count.matrix <- count.matrix[,!BM.loc]
+
+# normalize with cpm
+count.matrix.normalized <- cpm(count.matrix, log = T)
+
+meta.data <- colnames(count.matrix) %>% strsplit("-", fixed = T) %>% do.call(rbind, .) %>% as.data.frame
+
+colnames(meta.data) <- c("Strain", "Age", "Sex", "TCT", "SampleID")
+
+pca.plot <- function(x, overlaid.info, sample.names = NULL, show.names = TRUE, color.vals = NULL){
+  
+  if(is.null(sample.names)){
+    sample.names <- colnames(x)
+  } else{
+    if(length(sample.names) != ncol(x)){
+      stop("The length of `sample.names` should be equal to number of samples.")
+    }
+  }
+  
+  
+  # eliminate NaN values before-hand if there is any.
+  pca <- stats::prcomp(t(stats::na.omit(x)), center = TRUE)
+
+  d  <- round(pca$sdev^2/sum(pca$sdev^2)*100, digits=1)
+  xl <- sprintf("PC 1: %.1f %%", d[1])
+  yl <- sprintf("PC 2: %.1f %%", d[2])
+
+
+  plot.df <- data.frame(PC1 = as.numeric(pca$x[,1]),
+                   PC2 = as.numeric(pca$x[,2]),
+                   overlaid.info = overlaid.info,
+                   names = sample.names
+                   )
+
+  plot.pca <- ggplot2::ggplot(plot.df, ggplot2::aes(PC1, PC2, color = overlaid.info)) +
+    ggplot2::geom_point(size = 4) +
+    ggplot2::labs(x=xl,y=yl) +
+    ggplot2::theme_minimal() +
+    ggplot2::labs(color = "Status") +
+    ggplot2::coord_fixed(ratio = 1) +
+    ggplot2::theme_light()
+
+  if (typeof(overlaid.info) %in% c("character", "factor")){
+    if (!is.null(color.vals)){
+      plot.pca <- plot.pca +
+      ggplot2::scale_color_manual(values = color.vals)
+    } else{
+      plot.pca <- plot.pca +
+        ggplot2::scale_color_manual(values = RColorBrewer::brewer.pal(n = 9, name = "Set1"))
+    }
+  }
+
+  if(show.names){
+    plot.pca <- plot.pca + ggrepel::geom_text_repel(ggplot2::aes(label = names))
+  }
+  
+  return(plot.pca)
+}
+
+color.vals <- c("memory-3mo" = "#45b575",
+                "memory-18mo"= "#1a9850",
+                  "naive-3mo"= "#99d594",
+                  "naive-18mo" = "#80e378",
+                  "PBL-3mo" = "#d73027",
+                  "PBL-18mo" = "#a62019",
+                  "spleen-3mo"="#6e93c2",
+                  "spleen-12mo"="#4575b4",
+                  "spleen-18mo"="#265591")
+meta.data$TCT_Age<- paste0(meta.data$TCT, "-", meta.data$Age)
+meta.data$TCT[meta.data$TCT == "memory"] <- "CD8 memory"
+meta.data$TCT[meta.data$TCT == "naive"] <- "CD8 naive"
+
+pca.plot(count.matrix.normalized[na.omit(ap1.genes.ens),], gsub("mo", "", x = meta.data$Age), show.names = F, color.vals = color_values)
+ggsave(filename = "output/F4/PCA_AP1_Age.pdf",useDingbats = F)
+
+# Remove 12 months
+pca.plot(count.matrix.normalized[na.omit(ap1.genes.ens), meta.data$Age != "12mo"], gsub("mo", "", x = meta.data[ meta.data$Age != "12mo",]$Age), show.names = F, color.vals = color_values)
+ggsave(filename = "output/F4/PCA_AP1_Age_12_removed.pdf",useDingbats = F)
+
+
+pca.plot(count.matrix.normalized[na.omit(ap1.genes.ens),], meta.data$TCT, show.names = F, color.vals = color_values)
+ggsave(filename = "output/F4/PCA_AP1_TCT.pdf",useDingbats = F)
+
+
+pca.plot(count.matrix.normalized[na.omit(ap1.genes.ens),], meta.data$TCT_Age, show.names = F, color.vals = color.vals)
+ggsave(filename = "output/F4/PCA_AP1_TCT.pdf",useDingbats = F)
+
+
+# eliminate NaN values before-hand if there is any.
+pca <- stats::prcomp(t(stats::na.omit(count.matrix.normalized[(na.omit(ap1.genes.ens)),])), center = TRUE)
+
+d  <- round(pca$sdev^2/sum(pca$sdev^2)*100, digits=1)
+xl <- sprintf("PC 1: %.1f %%", d[1])
+yl <- sprintf("PC 2: %.1f %%", d[2])
+
+plot.df <- data.frame(PC1 = as.numeric(pca$x[,1]),
+                      PC2 = as.numeric(pca$x[,2]),
+                      TCT = meta.data$TCT,
+                      Age = gsub("mo", "", meta.data$Age)
+                      )
+
+plot.pca.ap1.mice <- ggplot(plot.df, aes(PC1, PC2, color = Age, shape = TCT)) +
+    geom_point(size = 4) +
+    labs(x=xl,y=yl) +
+    theme_minimal() +
+    labs(shape = "Tissue/Cell Type") +
+    coord_fixed(ratio = 1) +
+    theme_light(base_size = 16) + 
+    scale_color_manual(values = color_values) + 
+    scale_shape_manual(values=c(15:18))
+
+ggsave(filename = "output/F5/plot_PCA_AP1_mice.pdf", 
+       plot = plot.pca.ap1.mice, 
+       useDingbats = FALSE, width = 7, height = 5)
+
+
+plot.pca.ap1.mice.wo12 <- ggplot(plot.df %>% filter(Age != 12), 
+                            aes(PC1, PC2, color = Age, shape = TCT)) +
+    geom_point(size = 4) +
+    labs(x=xl,y=yl) +
+    theme_minimal() +
+    labs(shape = "Tissue/Cell Type") +
+    coord_fixed(ratio = 1) +
+    theme_light(base_size = 16) + 
+    scale_color_manual(values = color_values) + 
+    scale_shape_manual(values=c(15:18))
+
+ggsave(filename = "output/F5/plot_PCA_AP1_mice_wo12.pdf", 
+       plot = plot.pca.ap1.mice.wo12, 
+       useDingbats = FALSE, width = 7, height = 5)
+
+```
+
+
+```{r AP1 Heatmap mice}
+
+library(pheatmap)
+library(RColorBrewer)
+
+source("code/color_values.R")
+cm.ap1 <- count.matrix.normalized[na.omit(ap1.genes.ens),]
+
+rownames(meta.data) <- colnames(cm.ap1)
+
+meta.data$Age <- as.numeric(gsub("mo", "", meta.data$Age)) 
+
+rownames(cm.ap1) <- names(na.omit(ap1.genes.ens))
+
+pheatmap.order <- order(meta.data$Strain, meta.data$TCT, meta.data$Age, meta.data$Sex)
+
+meta.ordered <- meta.data[pheatmap.order,c(3,2,4,1)]
+cm.ordered <- cm.ap1[,pheatmap.order]
+
+
+meta.ordered$TCT[meta.ordered$TCT == "memory"] <- "CD8 memory"
+meta.ordered$TCT[meta.ordered$TCT == "naive"] <- "CD8 naive"
+
+
+ann_colors = list(
+    Sex = c(color_values["F"], color_values["M"]),
+    Strain = c(color_values["B6"], color_values["NZO"]),
+    Age = c(color_values["3"], color_values["12"], color_values["18"]),
+    TCT = c(color_values["PBL"], color_values["spleen"], color_values["CD8 memory"], color_values["CD8 naive"])
+)
+
+breaksList = seq(-3, 3, by = .001)
+pdf("output/F5/heatmap_AP1_expressions_all_mice.pdf", height = 4, width = 8)
+pheatmap(cm.ordered, scale = "row", annotation_col = meta.ordered, annotation_colors = ann_colors, 
+         breaks = breaksList,cluster_cols = F,
+         color = colorRampPalette(rev(brewer.pal(n = 9, name = "RdBu")))(length(breaksList)), border_color = "white", show_colnames = FALSE)
+dev.off()
+
+
+```
+
+
+```{r AP1 Human PBMC RNAseq}
+library(edgeR)
+library(dplyr)
+library(pheatmap)
+library(readxl)
+library(cinaR)
+library(RColorBrewer)
+library(viridis)
+
+ap1.genes <- c("Jun", "Junb", "Jund", "Fos", "Fosb", "Fosl2", "Fra1" ,"Fra2", "Atf" ,"Atf2", "Atf3", "Atf4", "Atf5", "Atf6", "Atf6b", "Atf7", "Batf", "Batf2", "Batf3" , "Jdp2", "Maf", "Mafa", "Mafb", "Maff", "Mafg", "Mafk")
+
+ap1.genes.human <- toupper(ap1.genes)
+
+sharedTFs <- c("NFE2L2", "JUNB", "JUND", "FOS", "FOSL2")
+
+load("data/RNAseq/human/pbmc_aging.summer2017_RNAseq_full.RData")
+meta <- read_excel("data/RNAseq/human/TableS1_Sample_information_with_dbgap_merged.xlsx", skip = 1)
+
+# find the RNAseq corresponding samples
+meta.filtered <- meta[(strsplit(meta$SampleID, "/", fixed = T) %>% sapply(function(x){x[1]})) %in% colnames(rna.pbmc),]
+
+# remove duplicated names
+patients <- strsplit(meta.filtered$SampleID, "/", fixed = T) %>%
+  sapply(function(x){x[1]})
+
+# Renew sampleIDs
+meta.filtered$SampleID <- patients
+
+# 1: Gene Name / Rest Samples
+count.matrix.human <- rna.pbmc[,c("GeneName",patients)]
+
+# Order genes according to their standard deviation in decreasing order
+count.matrix.human <- count.matrix.human [rev(order(apply(count.matrix.human[,-1], 1, sd))),]
+  
+# Remove duplicated genes
+count.matrix.human <- count.matrix.human [!duplicated(count.matrix.human[,1]),]
+  
+# Make the row names Ensembl Gene IDs
+rownames(count.matrix.human) <- count.matrix.human[,1] 
+
+# Filter Gene Names
+count.matrix.human <- count.matrix.human[,-1]
+
+# Enforce all counts to be integers
+count.matrix.human <- round(count.matrix.human, 0)
+
+# Filter low-expressed genes
+# Keep the genes that have Count-Per-Million more than k = 0.5 in n = 1 samples
+# It is pretty similar to filterByExpr(y, min.count = 0.5) but its choice of n is different.
+count.matrix.filtered <- count.matrix.human [rowSums(cpm(count.matrix.human) >= 0.5) >= 2,]
+
+count.matrix.human.normalized <- 
+  cpm(count.matrix.filtered %>% as.matrix, log = T)
+
+rownames(count.matrix.human.normalized) <- rownames(count.matrix.filtered)
+colnames(count.matrix.human.normalized) <- colnames(count.matrix.filtered)
+
+result.cinar <- cinaR(cbind(rownames(count.matrix.human), count.matrix.human), 
+                      contrasts = meta.filtered$Sex, 
+                      experiment.type = "RNA-Seq", run.enrichment = FALSE, 
+                      reference.genome = "hg19", batch.correction = TRUE)
+
+pca_plot(result.cinar, meta.filtered$Age, show.names = F)
+
+cm.cinar <- result.cinar$cp
+
+cm <- count.matrix.human.normalized[rownames(count.matrix.human.normalized) %in% ap1.genes.human,]
+cm2 <- cm.cinar[rownames(cm.cinar) %in% ap1.genes.human,]
+
+
+# eliminate NaN values before-hand if there is any.
+pca <- stats::prcomp(t(stats::na.omit(cm)))
+
+d  <- round(pca$sdev^2/sum(pca$sdev^2)*100, digits=1)
+xl <- sprintf("PC 1: %.1f %%", d[1])
+yl <- sprintf("PC 2: %.1f %%", d[2])
+
+
+plot.df <- data.frame(PC1 = as.numeric(pca$x[,2]),
+                 PC2 = as.numeric(pca$x[,4]),
+                 overlaid.info = meta.filtered$Age,
+                 overlaid.info2 = meta.filtered$Sex,
+                 names = meta.filtered$SampleID
+                 )
+
+plot.pca <- ggplot2::ggplot(plot.df, 
+                            ggplot2::aes(PC1, PC2, color = overlaid.info, shape = overlaid.info2)) + 
+  ggplot2::geom_point(size = 4) +
+  ggplot2::labs(x=xl,y=yl) +
+  ggplot2::theme_minimal() +
+  ggplot2::labs(color = "Status") +
+  ggplot2::coord_fixed(ratio = 1) +
+  ggplot2::theme_light() + 
+  ggplot2::theme(aspect.ratio=1) +
+  ggplot2::scale_color_gradient(low = "yellow", high = "red")
+
+plot.pca
+```
+
+
+```{r AP1 Human PBMC RNAseq}
+cm.ap1 <- cm[rownames(cm) %in% ap1.genes.human,]
+
+order.samples <- order(meta.filtered$Sex,meta.filtered$Age)
+
+meta.ap1 <- meta.filtered[order.samples,]
+cm.ap1 <- cm.ap1[,order.samples] 
+
+
+breaksList = seq(-2, 2, by = .001)
+
+ann_colors <- list(Sex = c(color_values["F"], color_values["M"]))
+
+meta.filtered$Sex
+
+df.col <- meta.filtered[,c("Age","Sex")] %>% as.data.frame
+rownames(df.col) <- meta.filtered$SampleID 
+
+pdf("output/F4/Heatmap_AP1_Genes_PBMC_Human.pdf", width = 10, height = 4)
+pheatmap(cm.ap1, 
+         color = colorRampPalette(rev(brewer.pal(n = 9, name = "RdBu")))(length(breaksList)),
+         cluster_cols = F, clustering_method = "average", border_color = "white",
+         annotation_col = df.col, scale = "row", gaps_col = 34, show_colnames = F)
+dev.off()
+```
+
+
+
+```{r AP1 Human PBMC ATACseq}
+library(readxl)
+load("data/ATACseq/human/pbmc_aging.summer2017_narrowPeaks.RData")
+
+meta <- read_excel("data/RNAseq/human/TableS1_Sample_information_with_dbgap_merged.xlsx", skip = 1)
+
+meta.patients <- strsplit(meta$SampleID, "/", fixed = T) %>% sapply(function(x){x[1]})
+meta$SampleID <- meta.patients
+
+atac.patients <- meta.patients[meta.patients %in% colnames(atac.allpeaks.pbmc)]
+
+meta.atac.filtered <- meta[meta$SampleID %in% atac.patients,]
+
+old.young.locs <- meta.atac.filtered$Group %in% c("HO", "HY")
+
+# preparing the data for cinaR
+atac.cinar <- atac.allpeaks.pbmc[,c(rep(T, 3), rep(F,2), old.young.locs)]
+meta.cinar <- meta.atac.filtered[old.young.locs,]
+
+
+result.cinar <- cinaR(atac.cinar, contrasts = meta.cinar$Group, reference.genome = "hg19", 
+                    batch.correction = F,  DA.choice = 2, DA.fdr.threshold = 1, 
+                    run.enrichment = F)
+
+DA.peaks <- result.cinar$DA.peaks$HO_HY
+
+DA.peaks <- DA.peaks %>% arrange(abs(distanceToTSS))
+DA.peaks <- DA.peaks[!duplicated(DA.peaks$gene_name) & !is.na(DA.peaks$gene_name),]
+
+ap1.peak.locs <- DA.peaks[DA.peaks$gene_name %in% ap1.genes.human,c("Row.names", "gene_name")]
+
+cp <- result.cinar$cp[ap1.peak.locs$Row.names,]
+
+pheatmap.order <- order(meta.cinar$Sex, meta.cinar$Age)
+
+cp <- cp[,pheatmap.order]
+meta.cinar <- meta.cinar[pheatmap.order,]
+
+ann_col <- data.frame(meta.cinar[,c("Age","Sex")])
+rownames(ann_col) <- meta.cinar$SampleID
+
+rownames(cp) <- ap1.peak.locs$gene_name
+
+ann_colors <- list(Sex = c(color_values["F"], color_values["M"]))
+
+breaksList = seq(-2, 2, by = .001)
+pdf("output/F4/Heatmap_AP1_Peaks_PBMC_Human_ATACseq.pdf", width = 8, height = 4)
+pheatmap(cp, annotation_col = ann_col, annotation_colors = ann_colors,
+         color = colorRampPalette(rev(brewer.pal(n = 9, name = "RdBu")))(length(breaksList)),
+         cluster_cols = F, clustering_method = "average", border_color = "white", 
+         scale = "row", show_colnames = FALSE)
+dev.off()
+
+```
+
+```{r FOSL2 Mice CD8+ RNAseq plots}
+source("code/color_values.R")
+
+load("data/genesets/selected_genesets.Rdata")
+cell.types <- c("memory", "naive")
+
+selected.genes <- c("FOS"   = "ENSMUSG00000021250",
+                    "IL1B"  = "ENSMUSG00000027398",
+                    "JUN"   = "ENSMUSG00000052684",
+                    "FOSL2" = "ENSMUSG00000029135")
+
+df.plot <- lapply(cell.types, function(cell.type){
+  
+  cm.norm <- get(load(paste0("data/RNAseq/F3_input/CPM Normalized Counts/rnaseq-expcount-cpm-",cell.type, ".RData")))
+  
+  meta <- strsplit(colnames(cm.norm), ".", fixed = T) %>% data.frame %>% t %>% data.frame(row.names = NULL)
+  colnames(meta) <- c("STRAIN", "AGE", "SEX", "TCT", "SAMPLEID")
+  meta$AGE <- gsub("mo", "", meta$AGE) %>% as.numeric
+  # FOS  :ENSMUSG00000021250
+  # IL1B :ENSMUSG00000027398
+  # JUN  :ENSMUSG00000052684
+  # FOSL2:ENSMUSG00000029135
+  df.gene <- data.frame(cbind(expr = cm.norm["ENSMUSG00000021250",], meta), stringsAsFactors = F) 
+  df.gene$AGE  <- factor(df.gene$AGE, levels = c(3,18))
+  df.gene$expr <- as.numeric((df.gene$expr))
+  return(df.gene)
+}) %>% do.call(rbind, .)
+
+ggplot(df.plot , aes(AGE, expr)) + 
+  geom_boxplot(aes(color = STRAIN, shape = TCT)) + 
+  stat_compare_means(comparisons = list(c("3","18")), 
+                     size = 4, method = "wilcox.test",
+                     tip.length = 0,
+                     vjust = 0, position = 9, label.y = 8.9) + 
+  geom_point(aes(color = STRAIN, shape = TCT), size = 3.5) + 
+  facet_wrap(~TCT + STRAIN, nrow = 1) + 
+  ggtitle("") + ylim(c(0,9)) +
+  xlab("") + ylab("") + 
+  theme_pubr(base_size = 12) + 
+  theme(strip.text = element_blank()) +
+  theme(legend.position="right") + 
+  scale_color_manual(values = color_values) +
+  labs(color = "Strain", shape = "Tissue")
+
+ggsave("output/F4/DE_genes/Mice_CD8_RNAseq_FOS.pdf",useDingbats = F, width = 6, height = 4)
+```
+
+```{r FOSL2 accesibility CD8 Mice}
+library(cinaR)
+
+load("data/ATACseq/F3_input/Consensus Peaks/atac_seq_consensus_memory.Rdata")
+meta <- strsplit(colnames(bed[,c(4:ncol(bed))]), "-", fixed=T)  %>%   data.frame %>% t %>% data.frame (row.names = NULL)
+result.memory <- cinaR(bed, meta$X3, reference.genome = "mm10", DA.choice = 2, run.enrichment = F, DA.fdr.threshold = 1)
+cp.memory <- result.memory$cp
+peaks <- result.memory$DA.peaks$F_M
+
+# peak at the promoter
+df.memory <- cbind(expr = cp.memory["chr5_32133622_32137195",], meta)
+
+# Naive
+load("data/ATACseq/F3_input/Consensus Peaks/atac_seq_consensus_naive.Rdata")
+meta <- strsplit(colnames(bed[,c(4:ncol(bed))]), "-", fixed=T)  %>%   data.frame %>% t %>% data.frame (row.names = NULL)
+result.naive <- cinaR(bed, meta$X3, reference.genome = "mm10", DA.choice = 2, run.enrichment = F, DA.fdr.threshold = 1)
+cp.naive <- result.naive$cp
+peaks <- result.naive$DA.peaks$M_F
+
+peaks[peaks$gene_name %in% "Fosl2", ]
+
+# peak at the promoter
+df.naive <- cbind(expr = cp.naive["chr5_32134958_32137137",], meta)
+
+df.plot <- rbind(df.naive, df.memory) %>% data.frame
+
+
+colnames(df.plot) <- c("expr", "STRAIN", "AGE", "SEX", "TCT", "1", "2", "3")
+df.plot$AGE <- gsub("mo", "", df.plot$AGE)
+df.plot$AGE <- factor(df.plot$AGE, levels = c("3", "18"))
+
+ggplot(df.plot , aes(AGE, expr)) + 
+  geom_boxplot(aes(color = STRAIN, shape = TCT)) + 
+
+  geom_point(aes(color = STRAIN, shape = TCT), size = 3.5) +
+  facet_wrap(~TCT + STRAIN, nrow = 1) + 
+  ggtitle("") + ylim(c(3,8)) +
+  xlab("") + ylab("") +
+  theme_pubr(base_size = 12) +
+  theme(strip.text = element_blank()) +
+  theme(legend.position="right") +
+    stat_compare_means(comparisons = list(c("3","18")),
+                     size = 4, method = "wilcox.test", paired = FALSE,
+                     tip.length = 0,
+                     vjust = 0, position = 8, label.y = 7.9) +
+  scale_color_manual(values = color_values) +
+  labs(color = "Strain", shape = "Cell Type")
+
+
+ggsave("output/F4/DE_genes/Mice_CD8_ATACseq_FOSL2.pdf",useDingbats = F, width = 6, height = 4)
+```
+
+
+

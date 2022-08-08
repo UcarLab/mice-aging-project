@@ -1,0 +1,96 @@
+---
+title: "TF_opt_num_clust"
+author: "Lori D Kregar"
+date: "2019-07-01"
+output: workflowr::wflow_html
+editor_options:
+  chunk_output_type: console
+---
+
+```{r libs, include=TRUE, echo=TRUE}
+library(NbClust)
+library(factoextra)
+library(cluster)
+library(GGally)
+library(reshape2)
+library(dplyr)
+```
+
+
+```{r load_data, include=TRUE, echo=TRUE}
+load("data/mouse_aging_footprint/mouse_opening_tree_fc.RData")
+mouse_opening_sim_matrix <- mouse_opening$similarities
+
+human_files <- dir(path = "data/human_aging_footprint/", 
+                   pattern = "human_tree_sig_filtered_merged_",
+                   full.names = TRUE)
+human_opening <- NULL
+human_closing <- NULL
+
+for(i in 1:length(human_files)){
+  load(human_files[i])
+  if(grepl("opening", human_files[i])){
+    if(is.null(human_opening)){
+      human_opening <- fc_merged$similarities
+    }else{
+      other_op <- fc_merged$similarities
+    }
+    
+  }else{
+    if(is.null(human_closing)){
+      human_closing <- fc_merged$similarities
+    }else{
+      other_cl <- fc_merged$similarities
+    }
+  }
+}
+
+#all(human_opening == other_op)
+#all(human_closing == other_cl)
+
+human_mouse_open_close <- list(human_open = human_opening,
+                               human_close = human_closing,
+                               mouse_open = mouse_opening_sim_matrix)
+
+matrix_of_sil_avg_widths <- matrix(0, ncol = length(2:15), nrow = length(human_mouse_open_close))
+matrix_of_sil_avg_widths_over_0.05 <- matrix(0, ncol = length(2:15), nrow = length(human_mouse_open_close))
+
+pdf("output/F5/clustering/silhouette_plots.pdf", width = 9, height = 7)
+for(i in 1:length(human_mouse_open_close)){
+  data_1 <- human_mouse_open_close[[i]]
+  dist_obj <- dist(data_1)
+  cluster_me <- hclust(dist_obj, method = "average")
+  for(j in 2:15){
+    if(j < nrow(data_1)){
+      cut <- cutree(cluster_me, k = j)
+      sil <- silhouette(cut, dist_obj)
+      print(fviz_silhouette(sil) + 
+              labs(subtitle = paste(names(human_mouse_open_close)[i], j)) +
+              theme(plot.subtitle = element_text(hjust = 0.5, face = "bold")))
+      sil_summary <- summary(sil)
+      matrix_of_sil_avg_widths[i,j-1] <- summary(sil)$avg.width
+      matrix_of_sil_avg_widths_over_0.05[i,j-1] <- mean(summary(sil)$clus.avg.widths[which(summary(sil)$clus.avg.widths>0.05)])
+    }
+  }
+}
+dev.off()
+
+df_of_sil <- data.frame(matrix_of_sil_avg_widths)
+colnames(df_of_sil) <- (2:15)
+rownames(df_of_sil) <- names(human_mouse_open_close)
+
+df_of_sil <- data.frame(t(df_of_sil))
+df_of_sil$mean <- (apply(df_of_sil, 1, mean))
+df_of_sil$clusters <- as.numeric(rownames(df_of_sil))
+df_sil_molten <- melt(df_of_sil, id.vars = "clusters")
+
+ggplot(data = df_sil_molten, aes(x = clusters, y = value, col = variable)) +
+  geom_line() +
+  scale_x_continuous(breaks = seq(2,15,1)) +
+  labs(y = "Average Silhouette Width") +
+  ggtitle("Hierarchical clustering, average linkage") +
+  theme_minimal() +
+  theme(panel.grid.minor.x = element_blank())
+
+ggsave(filename = "output/F5/clustering/silhouette_average.pdf", width = 8, height = 7)
+```

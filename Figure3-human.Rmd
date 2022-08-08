@@ -1,0 +1,838 @@
+---
+title: "Figure3-Human"
+author: "E Onur Karakaslar"
+date: "1/21/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+require(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+opts_knit$set(root.dir = "/Users/karako/Dropbox (JAX)/MouseAging_clean/NatureAgingSubmission/") #set root dir!
+```
+
+```{r libraries}
+library(readxl)
+library(ggpubr)
+library(ggpmisc)
+library(tidyverse)
+source("code/color_values.R")
+```
+
+```{r}
+bed_to_homer <-function(bed, filename = NULL){
+    
+  options(scipen=999) # prevent scientific notation because it may cause problems.
+  meta <- bed [,c(1:3)]
+  if (nrow(meta) <= 0) {
+      stop("Couldn't parse bed file!")
+  }
+  if (length(grep("[A-Za-z]", meta[,1])) == 0 ){ #check if includes chr
+    meta[,1] <- paste0("chr", meta[,1]) 
+  }
+  chrList  <- list()
+  uniqueID <- list()
+  counter  <- 0 
+  for (col in as.character((unlist(meta[,1])))){
+    
+    if (is.null(chrList[[(col)]])){
+      chrList[[(col)]] <- 1
+    } else {
+      chrList[[(col)]] <- chrList[[col]] + 1
+    }
+    counter <- counter + 1
+    uniqueID[[counter]] <- chrList[[(col)]]
+  }
+  
+  tbl <- meta %>% mutate(Strand = ".", UniqueID=paste0(Chr, "-", uniqueID %>% unlist)) %>% 
+    dplyr::select(UniqueID, everything())
+    if (!is.null(filename)){
+        write.table(x = tbl, file = filename,
+              sep = "\t", row.names = FALSE,quote= FALSE, col.names = TRUE)
+    }
+  options(scipen=0)
+  return(tbl)
+}
+```
+
+
+```{r}
+check_genesets <- function (genes, tissue_cell_type, contrast, union_size = 20e3){
+  
+  # Up regulated genes specs
+  genes_up_tbl   <- genes[[1]] 
+  # Down regulated genes specs
+  genes_down_tbl <- genes[[2]]
+  
+  # Change between TMM and Quantile fitting
+  loc_up <- match(c("P.Value","adj.P.Val"), colnames(genes_up_tbl))
+  if(!is.na(loc_up[1])) {
+   colnames(genes_up_tbl)[c(loc_up)] <- c("PValue","FDR")
+   colnames(genes_down_tbl)[c(loc_up)] <- c("PValue","FDR")
+  }
+  
+  # These are mice gene names which are differentially expressed.
+  genes_up   <- genes_up_tbl  [, "Gene.Name"] %>% as.character
+  genes_down <- genes_down_tbl[, "Gene.Name"] %>% as.character
+  
+  
+  genes_up   <- sapply(genes_up  , function(x) strsplit(x , "|", fixed = T) %>% unlist %>% tolower)
+  genes_down <- sapply(genes_down, function(x) strsplit(x , "|", fixed = T) %>% unlist %>% tolower)
+  # create an empty dataframe for enriched modules,
+  # so that later we can sort them and prepare excel tables, yey!
+  enriched_modules_df <- data.frame()
+  
+  # for each geneset, iterate each module
+  for (i in 1:length(selected_genesets)){
+    
+    geneset_name <- names(selected_genesets_labels)[[i]]
+    module_names <- selected_genesets_labels[[i]]
+    modules      <- selected_genesets       [[i]]
+    
+    # here we create empty p values, geneset name vectors so that we can adjust p values later
+    module_count        <- nrow(module_names)
+    vector_p_up         <- vector_p_down <- numeric(module_count) 
+    vector_module_names <- vector_geneset_names <- character(module_count)
+    # iterate the modules
+    
+    cat ("Geneset Name:", geneset_name, "\n")
+    for (j in 1:nrow(module_names)){
+      
+      module_ID   <- module_names[j, "Module.ID"]
+      module_name <- module_names[j, "Module.Name"]
+      module      <- modules[which(modules[, "Module.ID"] == module_ID), "GeneName"] %>% tolower
+      
+      # module gene count (constant for up/down)
+      gene_count_module <- unique(module) %>% length
+      
+      # upregulated gene count
+      n_up <- length(genes_up) 
+      
+      # overlapped up-regulated genes with the module
+      q_up <- sapply(genes_up, function (x, module) {
+        any(x %in% module)
+      }, module = module) %>% sum
+      # q_up <- genes_up %in% module %>% sum 
+
+      
+      # here we calculate the probability of having a bigger intersection
+      # than the count of overlapping genes given the module size and the total gene count.
+      # we substract 1 for removing the equality when the lower.tail = F, which changes P(X<x) to 1-P(X>=x).
+      p_up <- phyper(q_up-1, gene_count_module, union_size - gene_count_module, n_up, lower.tail = F, log.p = F)
+      
+      # overlapped down-regulated genes with the module
+      q_down <- sapply(genes_down, function (x, module) {
+        any(x %in% module)
+      }, module = module) %>% sum
+      
+      # downregulated gene count
+      n_down <- length(genes_down)
+      p_down <- phyper(q_down-1, gene_count_module, union_size - gene_count_module, n_down, lower.tail = F, log.p = F)
+      
+      vector_p_up[j]          <- p_up
+      vector_p_down[j]        <- p_down
+      vector_geneset_names[j] <- names(selected_genesets)[[i]]
+      vector_module_names[j]  <- module_name
+      
+      
+      # cat ("Module Gene Count: ",gene_count_module, "\n")
+      # cat ("Up\t-> overlap: ", q_up, ", gene count: " , n_up, "\n")
+      # cat ("Down\t-> overlap: ", q_down, ", gene count: " , n_down, "\n")
+    }
+    
+    df_up   <- data.frame(geneset.name = vector_geneset_names, 
+                module.name = vector_module_names,
+                p = vector_p_up,
+                stringsAsFactors = F)
+    
+    df_down <- data.frame(geneset.name = vector_geneset_names, 
+                module.name = vector_module_names,
+                p = vector_p_down,
+                stringsAsFactors = F)
+    
+    # adjust the p-values for each module
+    df_up$adj.p   <- p.adjust(p = df_up$p  , method = "fdr")
+    df_down$adj.p <- p.adjust(p = df_down$p, method = "fdr")
+    
+    # sort according to adjusted p-values and then to p-values
+    df_up   <- df_up  [order(df_up$adj.p  , df_up$p)  ,]
+    df_down <- df_down[order(df_down$adj.p, df_down$p),]
+    
+    # this is an important parameter since it affects the number of modules that are chosen
+    fdr.threshold <- 0.05
+    
+    # check if any modules are enriched for up regulated genes
+    if (any(df_up$p < fdr.threshold)){
+      
+      # take the enriched modules
+      enriched_modules <- df_up[df_up$p < fdr.threshold,]
+      
+      # add enriched modules to dataframe
+      enriched_modules_df <- cbind(TCT = tissue_cell_type, 
+                                   Contrast = contrast, 
+                                   enriched_modules,
+                                   Status="opening") %>% rbind(enriched_modules_df) 
+      
+      # for (k in 1:nrow(enriched_modules)){
+      #   cat(i,j,k,"\n")
+      #   enriched_module_name   <- enriched_modules[k, "module.name"]
+      #   enriched_module_ID_loc <- module_names[,"Module.Name"] %in% enriched_module_name 
+      #   enriched_module_ID     <- module_names[enriched_module_ID_loc,"Module.ID"]
+      #   enriched_module        <- modules[which(modules[,"Module.ID"] == enriched_module_ID),c("GeneName","Gene.stable.ID")]
+      #   
+      #   # add related specs to enriched module
+      #   enriched_module$logFC <- NA
+      #   enriched_module$p     <- NA
+      #   enriched_module$adj.p <- NA
+      #   
+      #   # take the gene specs and add it to enriched module
+      #   enriched_genes_locs        <- sapply(genes_up, function(x){
+      #                                   any(x %in% (enriched_module$Gene.stable.ID %>% tolower))
+      #                                 })
+      #   enriched_genes             <- genes_up_tbl [enriched_genes_locs,"Gene.Name"] %>% as.character
+      #   enriched_genes_module_locs <- sapply(enriched_genes, function(x){
+      #                                   x <- strsplit(x, "|", fixed = T) %>% unlist %>% tolower
+      #                                   loc <- match(x,(enriched_module$Gene.stable.ID %>% tolower))
+      #                                   loc <- loc[!is.na(loc)][1]
+      #                                 })
+      #   enriched_module[enriched_genes_module_locs,c("logFC","p", "adj.p")] <- 
+      #     genes_up_tbl [enriched_genes_locs,c("logFC","PValue","FDR")]
+      #   
+      #   enriched_module <- enriched_module[order(enriched_module$adj.p),]
+      #   
+      #   filename <- paste0("./output/RNAseq_Enrichment/fm_merged/",
+      #                      tissue_cell_type,"-",contrast,
+      #                      "-", geneset_name,"-",  gsub("/", "_", enriched_module_name),"-UpRegulated.csv")
+      #   cat ("\tSaving ", filename, "\n")
+      #   write.csv(enriched_module, file = filename)
+      # }
+    }
+    
+    # check if any modules are enriched for down regulated genes
+    # To-Do: I know I should make this a function...
+    if (any(df_down$p < fdr.threshold)){
+      
+      # take the enriched modules
+      enriched_modules <- df_down[df_down$p < fdr.threshold,]
+      
+     # add enriched modules to dataframe
+      enriched_modules_df <- cbind(TCT = tissue_cell_type, 
+                                   Contrast = contrast, 
+                                   enriched_modules,
+                                   Status="closing") %>% rbind(enriched_modules_df)  
+      
+    #   for (k in 1:nrow(enriched_modules)){
+    #     
+    #     cat(i,j,k,"\n")
+    #     
+    #     enriched_module_name   <- enriched_modules[k, "module.name"]
+    #     enriched_module_ID_loc <- module_names[,"Module.Name"] %in% enriched_module_name 
+    #     enriched_module_ID     <- module_names[enriched_module_ID_loc,"Module.ID"]
+    #     enriched_module        <- modules[modules[,"Module.ID"] %in% enriched_module_ID,]
+    #     
+    #     # add related specs to enriched module
+    #     enriched_module$logFC <- NA
+    #     enriched_module$p     <- NA
+    #     enriched_module$adj.p <- NA
+    #     
+    #     # take the gene specs and add it to enriched module
+    #     enriched_genes_locs        <- sapply(genes_down, function(x){
+    #                                     any(x %in% (enriched_module$Gene.stable.ID %>% tolower))
+    #                                   })
+    #     enriched_genes             <- genes_down_tbl [enriched_genes_locs,"Gene.Name"] %>% as.character
+    #     enriched_genes_module_locs <- sapply(enriched_genes, function(x){
+    #                                     x <- strsplit(x, "|", fixed = T) %>% unlist %>% tolower
+    #                                     loc <- match(x,(enriched_module$Gene.stable.ID %>% tolower))
+    #                                     loc <- loc[!is.na(loc)][1]
+    #                                   })
+    #     enriched_module[enriched_genes_module_locs,c("logFC","p", "adj.p")] <- 
+    #       genes_down_tbl [enriched_genes_locs,c("logFC","PValue","FDR")]
+    #     
+    #     enriched_module <- enriched_module[order(enriched_module$adj.p),]
+    #     
+    #     filename <- paste0("output/RNAseq_Enrichment/fm_merged/",
+    #                        tissue_cell_type,"-",contrast,
+    #                        "-", geneset_name,"-", gsub("/", "_", enriched_module_name),"-DownRegulated.csv")
+    #     cat (paste0("\tSaving ", filename, "\n"))
+    #     write.csv(enriched_module, file = filename)
+    #   }
+    # }
+  }
+  }
+  if (nrow(enriched_modules_df) == 0) return (NULL)
+  return (enriched_modules_df)
+}
+```
+
+```{r}
+refactor_df <- function(df, exp_type ="RNAseq"){
+  
+  if(exp_type == "RNAseq"){
+    new_df <- data.frame(
+      Gene.Name = df$GeneName,
+      logFC = df$logFC,
+      PValue = df$PValue,
+      FDR = df$FDR
+    )
+  
+    opening_genes <- new_df[new_df$logFC > 0,]
+    closing_genes <- new_df[new_df$logFC < 0,]
+    return(list(opening_genes = opening_genes, closing_genes = closing_genes))
+    
+  } else if (exp_type == "ATACseq") {
+    
+    new_df <- data.frame(
+      Gene.Name = df$GeneName,
+      logFC = df$logFC,
+      PValue = df$PValue,
+      FDR = df$FDR,
+      Distance.to.TSS = df$DistancetoTSS
+    )
+    tss_cutoff <- 50000
+    opening_peaks <- new_df[new_df$logFC > 0,] 
+    closing_peaks <- new_df[new_df$logFC < 0,]
+    
+    opening_genes <- dplyr::filter(opening_peaks, abs(Distance.to.TSS) < tss_cutoff) 
+    closing_genes <- dplyr::filter(closing_peaks, abs(Distance.to.TSS) < tss_cutoff)
+    return(list(opening_genes = opening_genes, closing_genes = closing_genes))
+    
+  } else {
+    stop("Oops, experiment type can only be 'RNAseq' or 'ATACseq'!")
+  }
+}
+```
+
+```{r}
+er_plot <- function(df, exp_type = "RNAseq"){
+  
+  if(exp_type == "RNAseq"){
+    levels(df$Status) <- c("Down", "Up")
+  } else {
+    df$Status <- factor(df$Status, levels = c("closing", "opening"))
+  }
+
+  for (var in unique(df$geneset.name)){
+    p <- ggplot(df[ df$geneset.name == var,],
+                aes(x=module.name, y=Gender, color = Status, size = -log10(p))) + 
+      xlab("") + 
+      geom_point() + 
+      coord_flip() + 
+      facet_wrap(~TCT) + 
+      scale_color_manual(values=c("#2166ACFF","#B2182BFF")) + 
+      theme_minimal(base_size = 16)
+      
+    if (var == 'wp'){
+      width_ = 20
+      height_ = 20
+    } else {
+      width_ = 6
+      height_ = 6
+    }
+    ggsave(paste0("output/F3/Enrichment Figures/Human_PMBC/Hypergeometric/",
+                  exp_type, "_", var, ".pdf"),
+        plot = p,
+        units = "in",
+        width = width_,
+        height = height_,
+        useDingbats = FALSE
+        )
+  }
+  
+}
+```
+
+
+```{r}
+load('analysis/cache/enrichment_analysis.Rdata')
+
+################ RNAseq ##################
+rnaseq_m_tbl <- read_excel(path = "data/RNAseq/F3_input/RNAseq_human_aging_differential_analysis_by_sex.xlsx", sheet = 2, col_types = NULL)
+rnaseq_f_tbl <- read_excel(path = "data/RNAseq/F3_input/RNAseq_human_aging_differential_analysis_by_sex.xlsx", sheet = 3, col_types = NULL)
+
+rnaseq_f_genes <- refactor_df(rnaseq_f_tbl)
+rnaseq_m_genes <- refactor_df(rnaseq_m_tbl)
+
+rnaseq_f_er <- check_genesets(rnaseq_f_genes, "PMBC", "Age")
+rnaseq_m_er <- check_genesets(rnaseq_m_genes, "PMBC", "Age")
+
+rnaseq_f_er <- cbind(rnaseq_f_er, Gender = "Female")
+rnaseq_m_er <- cbind(rnaseq_m_er, Gender = "Male")
+
+rnaseq_all_er <- rbind(rnaseq_m_er, rnaseq_f_er)
+er_plot(rnaseq_all_er, "RNAseq")
+
+
+################ ATACseq FDR = 0.05 DATA ##################
+
+atacseq_f_tbl <- read_excel("data/ATACseq/F3_input/ATACseq_human_aging_differential_analysis.xlsx", sheet = 1)
+atacseq_m_tbl <- read_excel("data/ATACseq/F3_input/ATACseq_human_aging_differential_analysis.xlsx", sheet = 2)
+
+atacseq_f_genes <- refactor_df(atacseq_f_tbl, exp_type = "ATACseq")
+atacseq_m_genes <- refactor_df(atacseq_m_tbl, exp_type = "ATACseq")
+
+atacseq_f_er <- check_genesets(atacseq_f_genes, "PBMC", "Age")
+atacseq_m_er <- check_genesets(atacseq_m_genes, "PBMC", "Age")
+
+atacseq_f_er <- cbind(atacseq_f_er, Gender = "Female")
+atacseq_m_er <- cbind(atacseq_m_er, Gender = "Male")
+
+atacseq_all_er <- rbind(atacseq_f_er, atacseq_m_er)
+er_plot(atacseq_all_er, "ATACseq")
+
+############### ATACseq All Data ##########################
+
+atacseq_tbl <- read.csv("data/ATACseq/F3_input/aging.summer2017_narrowPeaks_glm.results_AgexSex_homo_batchdate_BySex.txt", sep = "\t")
+homer_table <- read.csv("data/ATACseq/F3_input/atacseq_human_2017_homer_annotated.txt", sep = "\t")
+meta <- bed_to_homer(atacseq_tbl)
+atacseq_tbl <- cbind(UniqueID = meta$UniqueID, atacseq_tbl)
+
+homer_table <- homer_table[order(homer_table[,1]),]
+atacseq_tbl <- atacseq_tbl[order(atacseq_tbl[,1]),]
+
+atacseq_tbl <- cbind (atacseq_tbl, 
+                      DistancetoTSS = homer_table$Distance.to.TSS ,
+                      GeneName = homer_table$Gene.Name)
+threshold <- 0.1
+
+atacseq_m_tbl <- atacseq_tbl[(atacseq_tbl$Contrast %in% "Males_Age3xAge1")   & (atacseq_tbl$FDR < threshold),]
+atacseq_f_tbl <- atacseq_tbl[(atacseq_tbl$Contrast %in% "Females_Age3xAge1") & (atacseq_tbl$FDR < threshold),]
+
+atacseq_f_genes <- refactor_df(atacseq_f_tbl, exp_type = "ATACseq")
+atacseq_m_genes <- refactor_df(atacseq_m_tbl, exp_type = "ATACseq")
+
+atacseq_f_er <- check_genesets(atacseq_f_genes, "PBMC", "Age")
+atacseq_m_er <- check_genesets(atacseq_m_genes, "PBMC", "Age")
+
+atacseq_f_er <- cbind(atacseq_f_er, Gender = "Female")
+atacseq_m_er <- cbind(atacseq_m_er, Gender = "Male")
+
+atacseq_all_er <- rbind(atacseq_f_er, atacseq_m_er)
+er_plot(atacseq_all_er, "ATACseq")
+```
+
+```{r IL1B&FOSL2 expression changes}
+load("data/RNAseq/human/pbmc_aging.summer2017_RNAseq_full.RData")
+meta <- read_excel("data/RNAseq/human/TableS1_Sample_information_with_dbgap_merged.xlsx", skip = 1)
+
+# find the RNAseq corresponding samples
+meta.filtered <- meta[(strsplit(meta$SampleID, "/", fixed = T) %>% sapply(function(x){x[1]})) %in% colnames(rna.pbmc),]
+
+# remove duplicated names
+patients <- strsplit(meta.filtered$SampleID, "/", fixed = T) %>%
+  sapply(function(x){x[1]})
+
+# Renew sampleIDs
+meta.filtered$SampleID <- patients
+
+# control if it exists!
+rna.pbmc[rna.pbmc$GeneName == "IL1B",]
+
+# 1: Gene Name / Rest Samples
+count.matrix.human <- rna.pbmc[,c("GeneName",patients)]
+
+# Order genes according to their standard deviation in decreasing order
+count.matrix.human <- count.matrix.human [rev(order(apply(count.matrix.human[,-1], 1, sd))),]
+  
+# Remove duplicated genes
+count.matrix.human <- count.matrix.human [!duplicated(count.matrix.human[,1]),]
+  
+# Make the row names Ensembl Gene IDs
+rownames(count.matrix.human) <- count.matrix.human[,1] 
+
+# Filter Gene Names
+count.matrix.human <- count.matrix.human[,-1]
+
+# Enforce all counts to be integers
+count.matrix.human <- round(count.matrix.human, 0)
+
+# Filter low-expressed genes
+# Keep the genes that have Count-Per-Million more than k = 0.5 in n = 1 samples
+# It is pretty similar to filterByExpr(y, min.count = 0.5) but its choice of n is different.
+count.matrix.filtered <- count.matrix.human [rowSums(cpm(count.matrix.human) >= 0.5) >= 2,]
+
+# We used log-quantile normalization for human cohort instead of using DEseq2 log normalization, since one of the other papers used this normalization for their provided data.
+count.matrix.human.normalized <- 
+  cpm(count.matrix.filtered %>% as.matrix, log = T)
+
+rownames(count.matrix.human.normalized) <- rownames(count.matrix.filtered)
+colnames(count.matrix.human.normalized) <- colnames(count.matrix.filtered)
+
+selected.gene <- "JUNB"
+
+formula <- y ~ poly(x, 1, raw = TRUE)
+data.frame(gene.count = count.matrix.human.normalized[selected.gene, ], meta.filtered) %>% 
+  ggplot(aes(Age, gene.count, color = Sex)) +
+  geom_point(size = 3.5) + 
+  xlab("") + ylab("") + 
+  theme_pubr(base_size = 12) + 
+  theme(strip.text = element_blank()) +
+  theme(legend.position="right") + 
+  scale_color_manual(values = color_values) + 
+  theme_pubr() + 
+  geom_smooth(method = "lm", se= F, formula = formula) + 
+  stat_poly_eq(label.x = 0.95, 
+             label.y = 0.1, size = 3.5, color = "black",
+             aes(label = paste("atop(", stat(rr.label), ",", stat(p.value.label), ")", sep = "")), 
+             formula = formula, coef.digits = 3,
+             parse = TRUE) +
+  facet_wrap(~Sex) + 
+  theme(strip.background = element_blank(),
+        strip.text = element_blank())
+
+ggsave(paste0("output/F3/DE Genes/",selected.gene, "_human_RNAseq.pdf"), width = 6, height = 4, 
+       useDingbats = F)
+
+
+selected.gene <- "FOSL2"
+
+formula <- y ~ poly(x, 1, raw = TRUE)
+data.frame(gene.count = count.matrix.human.normalized[selected.gene, ], meta.filtered) %>% 
+  ggplot(aes(Age, gene.count, color = Sex)) +
+  geom_point(size = 3.5) + 
+  xlab("") + ylab("") + 
+  theme_pubr(base_size = 12) + 
+  theme(strip.text = element_blank()) +
+  theme(legend.position="right") + 
+  scale_color_manual(values = color_values) + 
+  theme_pubr() + 
+  geom_smooth(method = "lm", se= F, formula = formula) + 
+  stat_poly_eq(label.x = 0.95, 
+             label.y = 0.1, size = 3.5, color = "black",
+             aes(label = paste("atop(", stat(rr.label), ",", stat(p.value.label), ")", sep = "")), 
+             formula = formula, coef.digits = 3,
+             parse = TRUE) +
+  facet_wrap(~Sex) + 
+  theme(strip.background = element_blank(),
+        strip.text = element_blank())
+
+ggsave("output/F3/DE Genes/FOSL2_human_RNAseq.pdf", width = 6, height = 4, 
+       useDingbats = F)
+```
+
+```{r IL1B ATACseq peak change}
+load("/data/ATACseq/human/pbmc_aging.summer2017_narrowPeaks.RData")
+
+meta <- read_excel("/data/RNAseq/human/TableS1_Sample_information_with_dbgap_merged.xlsx", skip = 1)
+
+meta.patients <- strsplit(meta$SampleID, "/", fixed = T) %>% sapply(function(x){x[1]})
+meta$SampleID <- meta.patients
+
+atac.patients <- meta.patients[meta.patients %in% colnames(atac.allpeaks.pbmc)]
+
+meta.atac.filtered <- meta[meta$SampleID %in% atac.patients,]
+
+gene.name <- "JUNB"
+
+# check ILB1 exists
+peak.ID <- atac.allpeaks.anno.pbmc[atac.allpeaks.anno.pbmc$GeneName == gene.name,]
+peak.ID <- peak.ID %>% arrange(abs(DistancetoTSS))
+peak.ID <- peak.ID[1,]$peakco
+
+# create peak matrix with unique ids as rownames and columns with patients
+peak.matrix <- atac.allpeaks.pbmc[,atac.patients]
+rownames(peak.matrix) <- atac.allpeaks.pbmc$peakco
+
+# Filter low-expressed genes
+# Keep the genes that have Count-Per-Million more than k = 0.5 in n = 1 samples
+# It is pretty similar to filterByExpr(y, min.count = 0.5) but its choice of n is different.
+peak.matrix.filtered <- peak.matrix [rowSums(cpm(peak.matrix) >= 10) >= 2,]
+
+# ATACseq peaks are quantile normalized too to be consistent with the human RNAseq.
+peak.matrix.normalized <- cpm(peak.matrix.filtered %>% as.matrix, log = T)
+
+rownames(peak.matrix.normalized) <- rownames(peak.matrix.filtered)
+colnames(peak.matrix.normalized) <- colnames(peak.matrix.filtered)
+
+plot.gene.df <- data.frame(peak = peak.matrix.normalized[peak.ID,] %>% 
+                          as.numeric, meta.atac.filtered) 
+
+formula <- y ~ poly(x, 1, raw = TRUE)
+plot.gene <- plot.gene.df %>% 
+  ggplot(aes(Age, peak, color = Sex)) +
+  geom_point(size = 3.5) + 
+  xlab("") + ylab("") + 
+  theme_pubr(base_size = 12) + 
+  theme(strip.text = element_blank()) +
+  theme(legend.position="right") + 
+  scale_color_manual(values = color_values) + 
+  theme_pubr() + 
+  geom_smooth(method = "lm", se= F, formula = formula) + 
+  stat_poly_eq(label.x = 0.95, 
+             label.y = 0.1, size = 3.5, color = "black",
+             aes(label = paste("atop(", stat(rr.label), ",", stat(p.value.label), ")", sep = "")), 
+             formula = formula, coef.digits = 3,
+             parse = TRUE) +
+  facet_wrap(~Sex) + 
+  theme(strip.background = element_blank(),
+        strip.text = element_blank())
+
+ggsave(plot = plot.gene, filename = paste0("output/F3/DE Genes/", toupper(gene.name),"_human_ATACseq.pdf"), 
+       width = 6, height = 4, 
+       useDingbats = F)
+```
+
+```{r RNA seq mice inflammation common genes pheatmap}
+inf.common <- read.csv("output/F3/DE Genes/Inflammation_common_genes_mice.csv", row.names = 1)
+
+sample.order <- order(meta.filtered$Sex,meta.filtered$Age)
+
+mf.ordered <- meta.filtered[sample.order,]
+cm.ordered <- count.matrix.human.normalized[inf.common$x %>% as.character, sample.order]
+
+annotation.col = mf.ordered[,c("Sex","Age")] %>% as.data.frame
+rownames(annotation.col) <- colnames(cm.ordered)
+
+
+pdf("output/F3/DE Genes/Human_Inflammation_genes_of_mice.pdf", useDingbats = F,
+    width = 12, height = 8)
+pheatmap(cm.ordered,
+         scale = "row", cluster_rows = T, cluster_cols = F,  
+         annotation_col = annotation.col,
+         #annotation_row = annotation.row,
+         #annotation_colors = ann_colors,
+         #gaps_col = c(5,10,10,10, 16),
+         cellwidth = 8, cellheight = 8,
+         color = colorRampPalette((brewer.pal(n = 9, name = "YlOrRd")))(50),
+         border_color = "white", show_colnames = F)#, breaks = breaksList))
+dev.off()
+```
+
+
+
+
+```{r RNAseq GSEA}
+load("analysis/cache/enrichment_analysis.Rdata")
+
+rna.de.genes <- read_excel("data/RNAseq/human/RNAseq_DE_eladio.xlsx")
+
+
+rna.de.genes <- rna.de.genes[rna.de.genes$Contrast == "HOxHY",]
+
+rna.de.genes.m <- rna.de.genes %>% filter(Sex == "Males")
+rna.de.genes.f <- rna.de.genes %>% filter(Sex == "Females")
+
+
+# Load Biomart DB 
+# Notice that this database is for human, to see different DBs:
+# mart = useMart("ensembl"); listDatasets(mart)
+mart <- useMart("ensembl", 
+                host = "useast.ensembl.org",
+                dataset = "hsapiens_gene_ensembl")
+
+ensembl2geneID <- function(x) {
+  # Get the mapping matrix for ensembl_gene_id to hgnc_symbol!
+  mapping <- getBM(mart = mart, 
+                 useCache = T, uniqueRows = T,
+                 filters = "ensembl_gene_id",
+                 values = x$EnsemblID,
+                 attributes = c("ensembl_gene_id","hgnc_symbol"))
+  a<-duplicated(mapping)
+  mapping <- mapping[!a,]
+  y <- merge(x, mapping, by.x = "EnsemblID", by.y = "ensembl_gene_id", all.x = T, sort = F)
+  return (y)
+}
+
+rna.de.genes.m <- ensembl2geneID(rna.de.genes.m)
+rna.de.genes.f <- ensembl2geneID(rna.de.genes.f)
+
+# Virginia Pasqual Immune Modules
+geneset.name <- "vp2008"
+geneset <- selected_genesets[[geneset.name]]
+geneset.label <- selected_genesets_labels[[geneset.name]]
+
+geneset.merged <- merge(geneset, geneset.label, by = "Module.ID")
+
+pathways <- geneset.merged %>% group_split(Module.Name) %>% sapply(function(x) x[,"GeneName"])
+names(pathways)  <- geneset.label[,"Module.Name"]
+
+
+gsea <- function(top.table, pathways,tissue_cell_type, contrast){
+  
+  # use logFC as phenotype of interest
+  ranks <- top.table$logFC
+  
+  # make the gene names
+  names(ranks) <- top.table$hgnc_symbol
+  
+
+  gsea.list <- fgsea(pathways, ranks, minSize=15, maxSize = 500, nperm=1000)
+  gsea.list$Contrast <- contrast
+  gsea.list$TCT <- tissue_cell_type
+  return(gsea.list)
+}
+
+er.plot.f <- gsea(rna.de.genes.f, pathways, "PBMC", "HOxHY_F")
+er.plot.m <- gsea(rna.de.genes.m, pathways, "PBMC", "HOxHY_M")
+
+a <- rbind(er.plot.m,er.plot.f)
+
+p <- ggplot(a, 
+                aes(x=pathway, 
+                    y=Contrast, 
+                    color = ifelse(sign(NES %>% as.numeric) < 0, "Negative", "Positive"),
+                    size = ifelse(pval < 0.1, (-log10(pval %>% as.numeric)), NA)
+                    )
+                ) +
+      xlab("") + ylab("") + 
+      geom_point() + 
+      coord_flip() +
+      facet_wrap(~TCT) + 
+      scale_color_manual(values=c("#2166ACFF","#B2182BFF")) + 
+      scale_y_discrete(name ="", breaks=c("HOxHY_M","HOxHY_F"),labels=c("Males", "Females")) +
+    theme_minimal(base_size = 16) + labs(color = "Sign", size = "-log10(p)")
+
+```
+
+
+```{r Mouse Inflammation genes FC Heatmap }
+
+library(dichromat)
+inf.common.f <- rna.de.genes.f[rna.de.genes.f$hgnc_symbol %in% as.character(inf.common$x), ]
+inf.common.m <- rna.de.genes.m[rna.de.genes.m$hgnc_symbol %in% as.character(inf.common$x), ]
+
+df.common.fm <- rbind(inf.common.f, inf.common.m) %>% as.data.frame
+
+low.col <- dichromat::colorschemes$DarkRedtoBlue.12 [4]
+high.col <- dichromat::colorschemes$DarkRedtoBlue.12 [10]
+
+ggplot(df.common.fm, aes(x = Sex, y = hgnc_symbol, fill = logFC)) + 
+  geom_tile() +
+  theme_minimal() + 
+  xlab("") + ylab("") +
+  scale_fill_gradient2(low = low.col, high = high.col)
+
+ggsave(filename = "output/F3/DE Genes/Human_Inflammation_genes_of_mice_logFC.pdf", 
+       useDingbats = F, width = 3, height = 5)
+```
+
+
+```{r ATACseq GSEA}
+atacseq_tbl <- read.csv("data/ATACseq/F3_input/aging.summer2017_narrowPeaks_glm.results_AgexSex_homo_batchdate_BySex.txt", sep = "\t")
+homer_table <- read.csv("data/ATACseq/F3_input/atacseq_human_2017_homer_annotated.txt", sep = "\t")
+meta <- bed_to_homer(atacseq_tbl)
+atacseq_tbl <- cbind(UniqueID = meta$UniqueID, atacseq_tbl)
+
+homer_table <- homer_table[order(homer_table[,1]),]
+atacseq_tbl <- atacseq_tbl[order(atacseq_tbl[,1]),]
+
+atacseq_tbl <- cbind (atacseq_tbl, 
+                      DistancetoTSS = homer_table$Distance.to.TSS ,
+                      GeneName = homer_table$Gene.Name)
+threshold <- 1
+dtss <- 50e3
+
+
+
+
+atacseq_m_tbl <- atacseq_tbl[(atacseq_tbl$Contrast %in% "Males_Age3xAge1")   &
+                               (atacseq_tbl$FDR < threshold) & 
+                               (abs(atacseq_tbl$DistancetoTSS) < dtss),]
+atacseq_f_tbl <- atacseq_tbl[(atacseq_tbl$Contrast %in% "Females_Age3xAge1") &
+                               (atacseq_tbl$FDR < threshold) &
+                               (abs(atacseq_tbl$DistancetoTSS) < dtss),]
+
+gsea <- function(top.table, pathways,tissue_cell_type, contrast){
+  
+  # use logFC as phenotype of interest
+  ranks <- top.table$logFC
+  
+  # make the gene names
+  names(ranks) <- top.table$GeneName
+  
+
+  gsea.list <- fgsea(pathways, ranks, minSize=15, maxSize = 500, nperm=1000)
+  gsea.list$Contrast <- contrast
+  gsea.list$TCT <- tissue_cell_type
+  return(gsea.list)
+}
+
+top.table.f <- atacseq_f_tbl[order(abs(atacseq_f_tbl$DistancetoTSS)),]
+top.table.f <- top.table.f[!duplicated(top.table.f$GeneName),]
+
+top.table.m <- atacseq_m_tbl[order(abs(atacseq_m_tbl$DistancetoTSS)),]
+top.table.m <- top.table.m[!duplicated(top.table.m$GeneName),]
+
+er.plot.f <- gsea(top.table.f, pathways, "PBMC", "HOxHY_F")
+er.plot.m <- gsea(top.table.m, pathways, "PBMC", "HOxHY_M")
+
+a <- rbind(er.plot.m,er.plot.f)
+
+p <- ggplot(a, 
+                aes(x=pathway, 
+                    y=Contrast, 
+                    color = ifelse(sign(NES %>% as.numeric) < 0, "Negative", "Positive"),
+                    size = ifelse(pval < 0.1, (-log10(pval %>% as.numeric)), NA)
+                    )
+                ) +
+      xlab("") + ylab("") + 
+      geom_point() + 
+      coord_flip() +
+      facet_wrap(~TCT) + 
+      scale_color_manual(values=c("#2166ACFF","#B2182BFF")) + 
+      scale_y_discrete(name ="", breaks=c("HOxHY_M","HOxHY_F"),labels=c("Males", "Females")) +
+    theme_minimal(base_size = 16) + labs(color = "Sign", size = "-log10(p)")
+
+
+
+atacseq_f_genes <- refactor_df(atacseq_f_tbl, exp_type = "ATACseq")
+atacseq_m_genes <- refactor_df(atacseq_m_tbl, exp_type = "ATACseq")
+
+atacseq_f_er <- check_genesets(atacseq_f_genes, "PBMC", "Age")
+atacseq_m_er <- check_genesets(atacseq_m_genes, "PBMC", "Age")
+
+atacseq_f_er <- cbind(atacseq_f_er, Gender = "Female")
+atacseq_m_er <- cbind(atacseq_m_er, Gender = "Male")
+
+atacseq_all_er <- rbind(atacseq_f_er, atacseq_m_er)
+er_plot(atacseq_all_er, "ATACseq")
+```
+
+```{r Preparing ATACseq for motif analyses}
+load("data/ATACseq/human/pbmc_aging.summer2017_narrowPeaks.RData")
+
+meta <- read_excel("data/RNAseq/human/TableS1_Sample_information_with_dbgap_merged.xlsx", skip = 1)
+
+meta.patients <- strsplit(meta$SampleID, "/", fixed = T) %>% sapply(function(x){x[1]})
+meta$SampleID <- meta.patients
+
+atac.patients <- meta.patients[meta.patients %in% colnames(atac.allpeaks.pbmc)]
+
+meta.atac.filtered <- meta[meta$SampleID %in% atac.patients,]
+
+old.young.locs <- meta.atac.filtered$Group %in% c("HO", "HY")
+
+# preparing the data for cinaR
+atac.cinar <- atac.allpeaks.pbmc[,c(rep(T, 3), rep(F,2), old.young.locs)]
+meta.cinar <- meta.atac.filtered[old.young.locs,]
+
+
+result.cinar <- cinaR(atac.cinar, contrasts = meta.cinar$Group, reference.genome = "hg19", 
+                    batch.correction = F,  DA.choice = 2, DA.fdr.threshold = 1, 
+                    run.enrichment = F)
+
+# Prepare motif analyses files
+DA.res <- result.cinar$DA.peaks$HO_HY
+
+columns.needed <- c("UniqueID", "Chr", "Start", "End", "Strand")
+colnames(DA.res)[c(1:4, 6)] <- columns.needed
+DA.res$Strand <- "+"
+
+background.peaks <- DA.res[abs(DA.res$logFC) < 0.2, columns.needed]
+opening.peaks    <- DA.res[DA.res$logFC > 0 & DA.res$FDR < 0.1, columns.needed]
+closing.peaks    <- DA.res[DA.res$logFC < 0 & DA.res$FDR < 0.1, columns.needed]
+
+write.table(x = opening.peaks, 
+          file = "output/F5/Homer Motif Analyses/Human_PMBC/Opening_Human_PBMC_HomerReady.txt", 
+          quote = FALSE, sep = "\t", row.names = FALSE)
+write.table(x = closing.peaks, 
+          file = "output/F5/Homer Motif Analyses/Human_PMBC/Closing_Human_PBMC_HomerReady.txt", 
+          quote = FALSE, sep = "\t", row.names = FALSE)
+write.table(x = background.peaks, 
+          file = "output/F5/Homer Motif Analyses/Human_PMBC/Opening_Human_PBMC_HomerReady_Background.txt", 
+          quote = FALSE, sep = "\t", row.names = FALSE)
+write.table(x = background.peaks, 
+          file = "output/F5/Homer Motif Analyses/Human_PMBC/Closing_Human_PBMC_HomerReady_Background.txt", 
+          quote = FALSE, sep = "\t", row.names = FALSE)
+
+```
+

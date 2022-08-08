@@ -1,0 +1,1165 @@
+---
+title: "Opening and closing transcription factors in mice"
+author: "Lori D Kregar, Ahrim Youn, ... , Duygu Ucar"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: workflowr::wflow_html
+editor_options:
+  chunk_output_type: console
+---
+
+# Prepare the environment
+
+Note that some Rmd chunks are set to "eval=FALSE". This was to remove duplication of written output files.
+However, if set to TRUE and produce_plots_in_pdf=FALSE, this Rmd file will generate plots in the html document.
+
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(cache=TRUE)
+#knitr::opts_chunk$set(autodep = TRUE)
+require(knitr)
+
+opts_knit$set(root.dir = "/Users/karako/Dropbox (JAX)/MouseAging_clean/") #set root dir!
+```
+
+```{r libraries, echo=TRUE, include=FALSE}
+library(ComplexHeatmap)
+library(circlize)
+library(graph)
+library(RBGL)
+library(Vennerable)
+library(writexl)
+library(plyr)
+library(dplyr)
+library(JASPAR2018)
+library(rtracklayer)
+library(TFBSTools)
+library(dendextend)
+library(RColorBrewer)
+library(NbClust)
+library(factoextra)
+```
+
+```{r hardcoded_options, include=TRUE, echo=TRUE}
+cor.cutoff=0.9
+
+use_PFM_similarity_for_grouping <- TRUE
+
+produce_plots_in_pdf <- TRUE
+
+hm_width_pdf <- 8
+
+hm_height_pdf <- 8
+
+filter_pvals <- TRUE
+
+pq_value_cutoff <<- 0.05
+
+source(file = "code/TF_pfm_extension_functions.R")
+
+```
+
+```{r prepare_data, include=TRUE, echo=TRUE, results='hide'}
+
+# this function does most of the heavy lifting to take BiFET results and 
+# produce RData objects that contain the fold change and p-value matrices
+source(file = "code/heatmap_risk_mouse_ldk.R")
+
+```
+
+
+```{r load_extra_functions, include=TRUE, echo=TRUE}
+
+source("code/merge_TF_family_wf_helix.r")
+load("data/mouse_aging_footprint/mouse_unexpressed_genelist.Rdata")
+
+TFname<-function(TF){
+  if(length(TF)>0)
+    for(i in 1:length(TF)){
+      tmp=strsplit(TF[i],"")[[1]]
+      TF[i]=toupper(paste(tmp[-(1:7)],collapse=""))
+    }
+  return(TF)
+}
+
+```
+
+
+```{r analyse_opening_closing, include=TRUE, echo=TRUE}
+tissue=c("PBL","spleen","memory","naive")
+opening=closing=vector("list",length(tissue))
+names(opening)=names(closing)=tissue
+
+for(i in 1:length(tissue)){
+    load(paste("data/mouse_aging_footprint/topregulator",tissue[i],"_ldk.Rdata",sep=""))
+
+    opening[[i]]=   rownames(combinedheatmap[["increasing"]])
+    closing[[i]]=   rownames(combinedheatmap[["decreasing"]])
+
+}
+
+# only keep opening and closing peaks that appear across all tissues
+
+tmp=table(unlist(opening))
+commonopening=names(tmp)[tmp==4]
+
+tmp=table(unlist(closing))
+commonclosing=names(tmp)[tmp==4]
+
+for(i in 1:length(tissue)){
+    opening[[i]]=unique(TFname(opening[[i]]))
+    closing[[i]]=unique(TFname(closing[[i]]))
+}
+
+save(opening,closing,file="data/mouse_aging_footprint/TFlist.Rdata")
+
+openingheatmap=NULL
+closingheatmap=NULL
+
+for(i in 1:length(tissue)){
+    load(paste("data/mouse_aging_footprint/topregulator",tissue[i],"_ldk.Rdata",sep=""))
+    openingheatmap=cbind(openingheatmap,combinedheatmap[["increasing"]][commonopening,])
+}
+
+starting_heatmap <- openingheatmap
+
+colnames(starting_heatmap) <- paste(rep(tissue, each = 4), colnames(starting_heatmap))
+
+# merge TFs that correlate based on their fold change
+general_grouping <- merge.TF.family(starting_heatmap,TFfamily)
+
+```
+
+# Generate spreadsheets
+
+```{r opening_peaks_spreadsheet_sanity, include=TRUE, echo=TRUE}
+
+tissue <- c("PBL", "spleen", "memory", "naive")
+pt <- c("opening", "closing") # pt: peak type
+# check if top regulator the same as matall2[[4]]
+
+for(ti in tissue){
+  load(paste0("data/mouse_aging_footprint/topregulator",ti,"_ldk.Rdata"))
+  increasing_hm_from_topreg <- combinedheatmap[["increasing"]]
+  decreasing_hm_from_topreg <- combinedheatmap[["decreasing"]]
+  
+  load(paste0("data/mouse_aging_footprint/", ti, "_TRUE__matall_lists_ldk.Rdata"))
+  matall2_increasing <- matall2
+  
+  increasing_identical <- all(increasing_hm_from_topreg == matall2_increasing[[4]])
+  
+  load(paste0("data/mouse_aging_footprint/", ti, "_FALSE__matall_lists_ldk.Rdata"))
+  matall2_decreasing <- matall2
+  
+  decreasing_identical <- all(decreasing_hm_from_topreg == matall2_decreasing[[4]])
+  
+  if(increasing_identical & decreasing_identical){
+    print(paste(ti, "is fine"))
+  }else{
+    print(paste(ti, " IS NOT IDENTICAL!"))
+  }
+}
+
+# if TRUE --> use matall2[[4]] for fold change and matall2[[1]] for p-values
+
+```
+
+
+```{r full_peaks_spreadsheet, include=TRUE, echo=TRUE}
+
+list_of_peaks_per_tissue <- vector("list", length = length(pt))
+names(list_of_peaks_per_tissue) <- pt
+
+for(typeOfPeak in pt){
+  # prepare a named list with dataframes for excel
+  list_of_df <- vector("list", length = length(tissue))
+  names(list_of_df) <- tissue
+  
+  for(ti in tissue){
+    if(typeOfPeak == "opening"){
+      load(paste0("data/mouse_aging_footprint/", ti, "_TRUE__matall_lists_ldk.Rdata"))
+    }else{
+      load(paste0("data/mouse_aging_footprint/", ti, "_FALSE__matall_lists_ldk.Rdata"))
+    }
+    
+    df_FC <- matall2[[4]]
+    colnames(df_FC) <- paste0("FC ", colnames(df_FC))
+    
+    df_pvals <- matall2[[1]]
+    colnames(df_pvals) <- paste0("log p value ", colnames(df_pvals))
+    
+    all(sort(rownames(df_FC)) == sort(rownames(df_pvals)))
+    
+    df_FC_pval <- merge(as.data.frame(df_FC), as.data.frame(df_pvals), 
+                        by="row.names", all.x=TRUE)
+    
+    colnames(df_FC_pval)[1] <- "Transcription factor"
+    
+    df_FC_pval <- df_FC_pval[,c( "Transcription factor",
+                                 "FC B6 3mo",
+                                 "log p value B6 3mo", 
+                                 "FC B6 18mo",
+                                 "log p value B6 18mo",
+                                 "FC NZO 3mo",
+                                 "log p value NZO 3mo",
+                                 "FC NZO 18mo",
+                                 "log p value NZO 18mo")]
+    
+    df_FC_pval_names <- split_jaspar_name_return_df_of_names(df_FC_pval$`Transcription factor`)
+    
+    df_FC_pval <- merge(df_FC_pval_names, df_FC_pval, by = "Transcription factor")
+    
+    list_of_df[[ti]] <- df_FC_pval
+  }
+  
+  names(list_of_df)[3:4] <- c("CD8 memory", "CD8 naive")
+  
+  list_of_peaks_per_tissue[[typeOfPeak]] <- list_of_df
+  
+  # write excel spreadsheet
+  file_name <- paste0(typeOfPeak, "_transcription_factors_FC_p_mouse.xlsx")
+  write_xlsx(list_of_df, path = paste0("output/F5/mouse/", file_name))
+}
+
+save(list_of_peaks_per_tissue, file = "data/mouse_aging_footprint/mouse_TF_FC_p_xlsx.Rdata")
+
+```
+
+# Opening peaks in old mice from both strains: Fold change
+
+```{r plot_all_old_opening_homogeneous, include=TRUE, echo=TRUE, fig.height=9, fig.width=9, eval=TRUE}
+
+if(use_PFM_similarity_for_grouping){
+  hm_merged <- cluster_heatmaps_on_TF_similarity(starting_heatmap)  
+}else{
+  newgroup_all_old = general_grouping #merge.TF.family(starting_heatmap,TFfamily)
+
+  hm_merged = merge.matrix(starting_heatmap, newgroup_all_old)
+}
+
+tmp_all_old=hm_merged[,grepl("18mo", colnames(hm_merged))]
+rownames(tmp_all_old) <- toupper(rownames(tmp_all_old))
+
+colvec_all_old=colorRamp2(c(quantile(tmp_all_old,0.05), 
+                    quantile(tmp_all_old,0.95)), 
+                    c("#ffe6ed", "#c70039") # light and dark red for opening
+                    #c("#F4FAFE", "#273871")
+                    )
+
+lgd <-  (Legend(col_fun = colvec_all_old, 
+                title = "Fold change",
+                legend_height = unit(4, "cm"))) 
+
+# if(produce_plots_in_pdf){
+#   if(use_PFM_similarity_for_grouping){
+#     pdf("output/F5/plot_mouse_footprints_opening_old_only_PFM.pdf",
+#         width = hm_width_pdf, height = hm_height_pdf) 
+#   }else{
+#     pdf("output/F5/plot_mouse_footprints_opening_old_only_TF_fam.pdf", 
+#         width = hm_width_pdf, height = hm_height_pdf)
+#   }
+# }
+
+
+tissue=c("PBL","spleen","CD8 memory","CD8 naive")
+
+remove_mouse_tissue_from_colname <- function(x){
+    splitted <- strsplit(x, " ")[[1]]
+    species <- splitted[grepl("B6|NZO", splitted)]
+    age <- splitted[grepl("3mo|18mo", splitted)]
+    return(paste0(species, " ", age, collapse = ""))
+}
+
+# if any colname contains tissue name --> remove tissue name
+if(any(grepl("spleen", colnames(tmp_all_old)))){
+  new_colnames <- sapply(colnames(tmp_all_old), remove_mouse_tissue_from_colname)
+  colnames(tmp_all_old) <- new_colnames
+}
+
+rownames(tmp_all_old) <- sapply(rownames(tmp_all_old), 
+                                introduce_new_line_to_rownames, 
+                                new_line_after = 30)
+
+draw(Heatmap(tmp_all_old[,1:2], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             column_title=tissue[1], 
+             column_title_gp = gpar(fontsize = 10),
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             col=colvec_all_old,
+             show_heatmap_legend = FALSE,
+             row_names_max_width = max_text_width(
+                  rownames(tmp_all_old), 
+                  gp = gpar(fontsize = 10))) +
+       Heatmap(tmp_all_old[,3:4], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             column_title=tissue[2], 
+             column_title_gp = gpar(fontsize = 10),
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             show_heatmap_legend = FALSE,
+             row_names_max_width = max_text_width(
+                  rownames(tmp_all_old), 
+                  gp = gpar(fontsize = 10)),
+             col=colvec_all_old) +
+       Heatmap(tmp_all_old[,5:6], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             column_title=tissue[3], 
+             column_title_gp = gpar(fontsize = 10),
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             show_heatmap_legend = FALSE,
+             row_names_max_width = max_text_width(
+                  rownames(tmp_all_old), 
+                  gp = gpar(fontsize = 10)),
+             col=colvec_all_old) +
+       Heatmap(tmp_all_old[,7:8], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             column_title=tissue[4], 
+             column_title_gp = gpar(fontsize = 10),
+             #column_names_gp = gpar(fontsize = 7), 
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             show_heatmap_legend = FALSE,
+             row_names_max_width = max_text_width(
+                  rownames(tmp_all_old), 
+                  gp = gpar(fontsize = 10)),
+             col=colvec_all_old),
+     padding = unit(c(2, 2, 2, 20), "mm"))
+draw(lgd, just = c("right", "bottom"),
+     x = unit(0.965, "npc"), y = unit(0.05, "npc"))
+
+# if(produce_plots_in_pdf){
+#   dev.off()
+# }
+
+
+```
+
+```{r mouse_opening_dendrogram_of_merged, include=TRUE, echo=TRUE}
+
+hm_merged_dend <- cluster_heatmaps_on_TF_similarity(starting_heatmap, 
+                                                    return_dend = TRUE)
+
+plot_dend_basic <- produce_dendrogram_plot(some_dend = hm_merged_dend[[3]],
+                        num_clusters = length(unique(hm_merged_dend[[2]])),
+                        subtitle_ = "Organism: mouse, peak type: opening",
+                        path = "output/F5/mouse/mouse_opening_dendrogram_bw.pdf")
+
+plot_dend <- produce_dendrogram_plot(some_dend = hm_merged_dend[[3]],
+                        num_clusters = length(unique(hm_merged_dend[[2]])),
+                        subtitle_ = "Organism: mouse, peak type: opening",
+                        path = "output/F5/mouse/mouse_opening_dendrogram_colour.pdf",
+                        use_colours = TRUE,
+                        dark_background = "#AFAFAF", box_border = 1)
+
+```
+
+# Opening peaks in old mice from both strains: log p-values
+
+```{r heatmap_of_p_values, include=TRUE, echo=TRUE, fig.height=9, fig.width=9, eval=TRUE}
+
+# produce dataframe
+extract_pvals_opening_old <- lapply(list_of_peaks_per_tissue[["opening"]], function(x){
+  #x <- list_of_peaks_per_tissue[["opening"]][[1]]
+  only_p_val_cols <- x[,c(TRUE, grepl("p value", colnames(x)[2:ncol(x)]))]
+  only_old <- only_p_val_cols[,c(TRUE, grepl("18mo", colnames(only_p_val_cols)[2:ncol(only_p_val_cols)]))]
+  only_old_and_common <- only_old[which(only_old[,1] %in% commonopening),]
+  return(only_old_and_common)
+})
+
+# add tissue to colnames, which are "strain age"
+
+for(i in seq_along(extract_pvals_opening_old)){
+  colnames(extract_pvals_opening_old[[i]])[2] <- paste0(names(extract_pvals_opening_old)[i], "_", colnames(extract_pvals_opening_old[[i]])[2])
+  colnames(extract_pvals_opening_old[[i]])[3] <- paste0(names(extract_pvals_opening_old)[i], "_", colnames(extract_pvals_opening_old[[i]])[3])  
+}
+
+# combine all dataframes
+
+df_heat_pvals <- join_all(extract_pvals_opening_old, by = "Transcription factor")
+
+df_heat_pvals_to_mat <- df_heat_pvals
+
+rownames(df_heat_pvals_to_mat) <- df_heat_pvals_to_mat[,1]
+df_heat_pvals_to_mat <- df_heat_pvals_to_mat[,-c(1)]
+
+# plot
+
+matrix_p_values_all_old <- as.matrix(df_heat_pvals_to_mat)
+
+colnames(matrix_p_values_all_old) <- sapply(colnames(matrix_p_values_all_old), function(x){
+  #x <- colnames(matrix_p_values_all_old)[1]
+  only_strain_age <- strsplit(x, " ")[[1]]
+  only_strain_age <- paste0(only_strain_age[c(length(only_strain_age)-1,length(only_strain_age))],
+                            collapse = " ")
+})
+
+# here, ensure you use the FC grouping for p values, since grouping depends on
+# FC correlation
+
+if(use_PFM_similarity_for_grouping){
+  colnames(matrix_p_values_all_old) <- paste(rep(tissue, each = 2), colnames(matrix_p_values_all_old))
+  
+  tmp_all_old_pvals <- cluster_heatmaps_on_TF_similarity(matrix_p_values_all_old)
+}else{
+  heatmap_all_old_pvals <- merge.matrix(matrix_p_values_all_old, newgroup_all_old)
+
+  tmp_all_old_pvals <- heatmap_all_old_pvals
+}
+
+rownames(tmp_all_old_pvals) <- toupper(rownames(tmp_all_old_pvals))
+rownames(tmp_all_old_pvals) <-  sapply(rownames(tmp_all_old_pvals), 
+                                       introduce_new_line_to_rownames, 
+                                       new_line_after = 30)
+
+if(any(grepl("spleen", colnames(tmp_all_old_pvals)))){
+  colnames_wo_tissue <- sapply(colnames(tmp_all_old_pvals), 
+                               remove_mouse_tissue_from_colname)
+  colnames(tmp_all_old_pvals) <- colnames_wo_tissue
+}
+
+
+colvec_all_old_pvals=colorRamp2(c(quantile(tmp_all_old_pvals,0.05), 
+                    quantile(tmp_all_old_pvals,0.95)),
+                    # 
+                    c("#fff1e6", "#e66700"))
+
+
+legend_p <-  (Legend(col_fun = colvec_all_old_pvals, 
+                title = "log p-value",
+                legend_height = unit(4, "cm"))) 
+
+
+# if(produce_plots_in_pdf){
+#   if(use_PFM_similarity_for_grouping){
+#     pdf("output/F5/plot_mouse_footprints_opening_only_old_pvalues_PFM_sim.pdf", 
+#         width = hm_width_pdf, height = hm_height_pdf)
+#   }else{
+#     pdf("output/F5/plot_mouse_footprints_opening_only_old_pvalues_TF_sim.pdf", 
+#         width = hm_width_pdf, height = hm_height_pdf)  
+#   }
+# }
+
+tissue=c("PBL","spleen","CD8 memory","CD8 naive")
+
+draw(Heatmap(tmp_all_old_pvals[,1:2], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             column_title=tissue[1], 
+             column_title_gp = gpar(fontsize = 10),
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             col=colvec_all_old_pvals,
+             show_heatmap_legend = FALSE,
+             row_names_max_width = max_text_width(
+                  rownames(tmp_all_old_pvals), 
+                  gp = gpar(fontsize = 10))) +
+       Heatmap(tmp_all_old_pvals[,3:4], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             column_title=tissue[2], 
+             column_title_gp = gpar(fontsize = 10),
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             show_heatmap_legend = FALSE,
+             row_names_max_width = max_text_width(
+                  rownames(tmp_all_old_pvals), 
+                  gp = gpar(fontsize = 10)),
+             col=colvec_all_old_pvals) +
+       Heatmap(tmp_all_old_pvals[,5:6], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             column_title=tissue[3], 
+             column_title_gp = gpar(fontsize = 10),
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             show_heatmap_legend = FALSE,
+             row_names_max_width = max_text_width(
+                  rownames(tmp_all_old_pvals), 
+                  gp = gpar(fontsize = 10)),
+             col=colvec_all_old_pvals) +
+       Heatmap(tmp_all_old_pvals[,7:8], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             column_title=tissue[4], 
+             column_title_gp = gpar(fontsize = 10),
+             #column_names_gp = gpar(fontsize = 7), 
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             show_heatmap_legend = FALSE,
+             row_names_max_width = max_text_width(
+                  rownames(tmp_all_old_pvals), 
+                  gp = gpar(fontsize = 10)),
+             col=colvec_all_old_pvals),
+     padding = unit(c(2, 2, 2, 20), "mm"))
+draw(legend_p, just = c("right", "bottom"),
+     x = unit(0.965, "npc"), y = unit(0.05, "npc"))
+
+# if(produce_plots_in_pdf){
+#   dev.off()  
+# }
+
+```
+
+```{r write_xlsx_for_merged, include=TRUE, echo=TRUE}
+
+formatted_merged_hm <- vector("list", 2)
+names(formatted_merged_hm) <- c("Fold change", "log p-values (FDR)")
+
+formatted_merged_hm[[1]] <- tmp_all_old
+formatted_merged_hm[[2]] <- tmp_all_old_pvals
+
+tissue=c("PBL","spleen","CD8 memory","CD8 naive")
+
+formatted_merged_w_tissue <- lapply(formatted_merged_hm, function(x, tis){
+  colnames(x) <- paste(rep(tis, each = 2), colnames(x))
+  y <- as.data.frame(x)
+  y$`Transcription factor` <- rownames(y)
+  y <- y[,c(ncol(y), c(1:(ncol(y)-1)))]
+  y$`Transcription factor` <- gsub("\n ", "", y$`Transcription factor`)
+  return(y)
+}, tis = tissue)
+
+file_name_merged <- "mouse_merged_transcription_factors_opening_FC_p.xlsx"
+#write_xlsx(formatted_merged_w_tissue, path = paste0("output/F5/", file_name_merged))
+
+```
+
+## Plots FC and pv heatmaps, trees, and produce merged spreadsheet
+
+```{r filter_to_old, include=TRUE, echo=TRUE}
+
+tissue <- c("PBL", "spleen", "CD8+ memory", "CD8+ naive")
+
+pval_cutoff <- -log(pq_value_cutoff) # -log10(0.05)
+
+starting_FC <- starting_heatmap
+starting_FC_df <- data.frame(starting_FC)
+colnames(starting_FC_df) <- colnames(starting_FC)
+starting_FC_df <- cbind(`Transcription factor` = rownames(starting_FC_df), starting_FC_df)
+starting_pv <- df_heat_pvals
+
+only_sig_FC_pv <- keep_only_significant_FC_pv(starting_FC_df, starting_pv,
+                                              filter_by = "18mo", 
+                                              threshold = pval_cutoff)
+
+colors_fc_p <- list(fc = c("#ffe6ed", "#c70039") , pv = c("#fff1e6", "#e66700"))
+
+filtered_merged_tf <- vector("list", 2)
+
+for(i in 1:2){
+  FC_or_p <- ifelse(i == 1, "fc", "pv")
+  
+  matrix_of_vals <- as.matrix(only_sig_FC_pv[[i]][,2:ncol(only_sig_FC_pv[[i]])])
+  rownames(matrix_of_vals) <- only_sig_FC_pv[[i]][,1]
+  clustered <- cluster_heatmaps_on_TF_similarity(matrix_of_vals,
+                                                 return_dend = TRUE)
+  
+  mouse_opening <- clustered
+
+  save(mouse_opening, file = paste0("data/mouse_aging_footprint/mouse_opening_tree_",FC_or_p,".RData"))
+  
+  df_hm_formatted_rn <- clustered[[1]]
+  filtered_merged_tf[[i]] <- clustered[[1]]
+  rownames(df_hm_formatted_rn) <- sapply(rownames(df_hm_formatted_rn),
+                                         introduce_new_line_to_rownames,
+                                         new_line_after = 30)
+  
+  colnames(df_hm_formatted_rn) <- sapply(colnames(df_hm_formatted_rn), remove_mouse_tissue_from_colname)
+  
+  if(produce_plots_in_pdf){
+    pdf(paste0("output/F5/mouse/mouse_filtered_opening_old_merged_PFM_", FC_or_p,".pdf"),
+        width = 8, height = 7)
+  }
+  
+  colvec_sig_old_FC=colorRamp2(c(quantile(df_hm_formatted_rn,0.05), 
+                    quantile(df_hm_formatted_rn,0.95)),
+                    # 
+                    colors_fc_p[[i]])
+  
+  legend_only_sig_FC <- (Legend(col_fun = colvec_sig_old_FC, 
+                title = ifelse(i == 1, "Fold change", "Log p value"),
+                legend_height = unit(4, "cm"))) 
+  
+  draw(Heatmap(df_hm_formatted_rn[,1:2], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             column_title=tissue[1], 
+             column_title_gp = gpar(fontsize = 10),
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             col=colvec_sig_old_FC,
+             show_heatmap_legend = FALSE,
+             row_names_max_width = max_text_width(
+                  rownames(df_hm_formatted_rn), 
+                  gp = gpar(fontsize = 10))) +
+       Heatmap(df_hm_formatted_rn[,3:4], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             column_title=tissue[2], 
+             column_title_gp = gpar(fontsize = 10),
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             show_heatmap_legend = FALSE,
+             row_names_max_width = max_text_width(
+                  rownames(df_hm_formatted_rn), 
+                  gp = gpar(fontsize = 10)),
+             col=colvec_sig_old_FC) +
+       Heatmap(df_hm_formatted_rn[,5:6], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             column_title=tissue[3], 
+             column_title_gp = gpar(fontsize = 10),
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             show_heatmap_legend = FALSE,
+             row_names_max_width = max_text_width(
+                  rownames(df_hm_formatted_rn), 
+                  gp = gpar(fontsize = 10)),
+             col=colvec_sig_old_FC) +
+       Heatmap(df_hm_formatted_rn[,7:8], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             column_title=tissue[4], 
+             column_title_gp = gpar(fontsize = 10),
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             show_heatmap_legend = FALSE,
+             row_names_max_width = max_text_width(
+                  rownames(df_hm_formatted_rn), 
+                  gp = gpar(fontsize = 10)),
+             col=colvec_sig_old_FC),
+     padding = unit(c(2, 2, 2, 20), "mm"))
+  draw(legend_only_sig_FC, just = c("right", "bottom"),
+     x = unit(0.965, "npc"), y = unit(0.05, "npc"))
+  
+  if(produce_plots_in_pdf){
+    dev.off()
+  }
+  
+  #if(produce_plots_in_pdf){
+  holder <- produce_dendrogram_plot(clustered[[3]],
+                                    length(unique(clustered[[2]])),
+                                    path = paste0("output/F5/mouse/mouse_opening_filtered_tree_",
+                                                  i, ".pdf"),
+                                    subtitle_ = "Mouse, opening",
+                                    png = FALSE)
+  #}
+  
+  
+  
+}
+
+# produce spreadsheet
+
+merged_filtered_old <- lapply(filtered_merged_tf, function(x){
+  y <- as.data.frame(x)
+  y_n <- cbind(`Transcription factor` = rownames(x), y)
+  colnames(y_n) <- gsub("_log p value ", " ", colnames(y_n))
+  return(y_n)
+})
+
+names(merged_filtered_old) <- c("Fold change", "log p-values (FDR)")
+
+file_name_merged_filtered <- "mouse_merged_filtered_transcription_factors_opening_FC_p.xlsx"
+write_xlsx(merged_filtered_old, path = paste0("output/F5/mouse/", file_name_merged_filtered))
+
+
+```
+
+```{r opening_in_old_sig_per_tissue, include=TRUE, echo=TRUE}
+
+log_p_thr <- -log(pq_value_cutoff) #-log10(0.05)
+
+tissue <- c("PBL", "spleen", "memory", "naive")
+
+find_sig_per_tissue <- vector("list", length = length(tissue))
+
+for(i in 1:length(tissue)){
+  #tissue_cols <- c(1, grep(tissue[i], colnames(only_sig_FC_pv[["df_pv"]])))
+  fold_changes <- only_relevant_cols(only_sig_FC_pv[["df_FC"]], tissue[i])
+  log_p_values <- only_relevant_cols(only_sig_FC_pv[["df_pv"]], tissue[i])
+  
+  relevant <- keep_only_significant_FC_pv(fold_changes, 
+                                          log_p_values, 
+                                          FALSE, 
+                                          threshold = log_p_thr)
+  relevant_names <- split_jaspar_name_return_df_of_names(as.character(relevant[[1]][,1]))
+  find_sig_per_tissue[[i]] <- list(short_name = sort(unique(relevant_names$name)),
+                                   id = sort(unique(toupper(relevant_names$`Transcription factor`))))
+}
+
+
+```
+
+# Venn diagram: opening peaks
+
+```{r plot_venn_opening, include=TRUE, echo=TRUE}
+
+source("code/library_function_wf_flow.R")
+# non filtered values
+# opening0=opening
+# 
+# opening0 <- opening
+# 
+# closing0=closing
+
+# filtered values
+opening0 <- lapply(find_sig_per_tissue, "[[", 1)
+
+names(opening0) <- c("PBL", "spleen", "CD8+ memory", "CD8+\nnaive")
+
+save(opening0, file = "data/mouse_aging_footprint/opening0.RData")
+
+
+if(produce_plots_in_pdf){
+  pdf(file = "output/F5/mouse/mouse_venn_opening.pdf",
+      width = 7, height = 5)
+}
+
+txt_size <- 2
+number_size <- 20
+
+venn.alpha <- Venn(Sets = opening0)
+gp.alpha <- compute.Venn(venn.alpha, type = "ChowRuskey",  doWeights = T)
+gp.a <- VennThemes(gp.alpha)
+gp_ <- VennThemes(gp.alpha,increasingLineWidth=FALSE)
+# modify tissue font size
+gp_[["SetText"]][["Set1"]]$cex <- txt_size
+gp_[["SetText"]][["Set1"]]$col <- color_values[which(names(color_values) == "PBL")]
+gp_[["Set"]][["Set1"]]$col <- color_values[which(names(color_values) == "PBL")]
+
+
+gp_[["SetText"]][["Set2"]]$cex <- txt_size
+gp_[["SetText"]][["Set2"]]$col <- color_values[which(names(color_values) == "spleen")]
+gp_[["Set"]][["Set2"]]$col <- color_values[which(names(color_values) == "spleen")]
+
+gp_[["SetText"]][["Set3"]]$cex <- txt_size
+gp_[["SetText"]][["Set3"]]$col <- color_values[which(names(color_values) == "CD8.memory")]
+gp_[["Set"]][["Set3"]]$col <- color_values[which(names(color_values) == "CD8.memory")]
+
+gp_[["SetText"]][["Set4"]]$cex <- txt_size
+gp_[["SetText"]][["Set4"]]$col <- color_values[which(names(color_values) == "CD8.naive")]
+gp_[["Set"]][["Set4"]]$col <- color_values[which(names(color_values) == "CD8.naive")]
+
+# modify tissue label positions
+labs <- VennGetSetLabels(gp.alpha)
+labs$x <- c(-2.8, 3.5, 1.7, -4.6) #c("PBL", "spleen", "CD8+ memory", "CD8+\nnaive")
+labs$y <- c(2.3, 0.4, -3.3, -2) # c("PBL", "spleen", "CD8+ memory", "CD8+\nnaive")
+gp.alpha <- VennSetSetLabels(gp.alpha, labs)
+############################
+# modify intersect numbers
+gp_[["FaceText"]][["1100"]]$fontsize <- number_size
+gp_[["Face"]][["1100"]]$fill <- "#EE7600" #FF5733" #
+
+gp_[["FaceText"]][["1111"]]$fontsize <- number_size
+gp_[["Face"]][["1111"]]$fill <- "#c70039"#"#C70039"
+
+gp_[["FaceText"]][["1110"]]$fontsize <- number_size
+gp_[["Face"]][["1110"]]$fill <- "#FFC300"
+
+gp_[["FaceText"]][["0111"]]$fontsize <- number_size
+gp_[["Face"]][["0111"]]$fill <- "#F87531" #FF5733"
+# modify intersect numbers positions
+#labs_intersect <- VennGetFaceLabels(gp.alpha)
+#labs_intersect$x <- c(-4, 3.5, 2, 0) # naive, spleen, memory, pbl, bckgrnd
+#x
+gp.alpha@ FaceLabels[,3]  <- c(-2.5, 3.5, 2.2, 0, 0) #labs_intersect$x
+#labs_intersect$y <- labs_intersect$y
+# y
+gp.alpha@ FaceLabels[,4]  <- c(-2,-0.8,-2.24,0,0) #labs_intersect$y
+
+intersect_all <- Reduce(intersect, opening0)
+
+intersect_CD8M_CD8N_minus_all <- setdiff(intersect(opening0$`CD8+ memory`, 
+                                opening0$`CD8+
+naive`), intersect_all)
+
+intersect_PBL_CD8M_minus_all <- setdiff(intersect(opening0$PBL, opening0$`CD8+ memory`), intersect_all)
+
+intersect_PBL_spleen_minus_all <- setdiff(intersect(opening0$PBL, opening0$spleen), intersect_all)
+
+full_bottom_text <- paste0("Intersect of all (", length(intersect_all), "): ", introduce_new_line_to_rownames(paste0(intersect_all, collapse = ","),40), "\n",
+                           "Intersect of PBL & spleen minus all (", length(intersect_PBL_spleen_minus_all), "): ", 
+                           introduce_new_line_to_rownames(paste0(intersect_PBL_spleen_minus_all, collapse = ","), 60), "\n",
+                           "Intersect of PBL & CD8+ memory minus all (", length(intersect_PBL_CD8M_minus_all), "): ", 
+                           introduce_new_line_to_rownames(paste0(intersect_PBL_CD8M_minus_all, collapse = ","), 60), "\n",
+                           "Intersect of CD8+ minus all (",length(intersect_CD8M_CD8N_minus_all),"): ", 
+                           introduce_new_line_to_rownames(paste0(intersect_CD8M_CD8N_minus_all, collapse = ","), 60))
+
+
+grid.newpage()
+plot(gp.alpha, 
+     gp = gp_,
+     show=list(Universe=FALSE,
+     DarkMatter = FALSE))
+
+#grid.newpage()
+gridExtra::grid.arrange(grid::grid.grabExpr(plot(gp.alpha,
+     gp = gp_,
+     show=list(Universe=FALSE))), 
+                          top=textGrob(paste0("Opening peaks in young mice, log p value threshold: ", round(log_p_thr, digits = 3)),
+                                       gp=gpar(fontsize=15)),
+                          bottom = textGrob(paste0(full_bottom_text)))
+
+
+
+if(produce_plots_in_pdf){
+  dev.off()
+}
+
+```
+
+```{r opening_spleen_mem_naive, include=FALSE, echo=FALSE}
+
+# plot subsets of opening
+opening_sub <- opening0
+
+# remove PBL
+opening_spleen_mem_nai <- opening_sub
+opening_spleen_mem_nai[[1]]=NULL
+
+venn.alpha_sp_me_na <- Venn(SetNames = tissue[-1],Sets = opening_spleen_mem_nai)
+gp.alpha_sp_me_na <- compute.Venn(venn.alpha_sp_me_na)
+gp.a_sp_me_na <- VennThemes(gp.alpha_sp_me_na)
+plot(venn.alpha_sp_me_na, show=list(Universe=FALSE))
+
+```
+
+```{r opening_pbl_spleen, include=TRUE, echo=TRUE}
+
+opening_pbl_spleen=opening_sub
+opening_pbl_spleen[[3]]=opening_pbl_spleen[[4]]=NULL
+
+venn.alpha_pbl_spleen <- Venn(SetNames = tissue[-c(3:4)],Sets = opening_pbl_spleen)
+gp.alpha_pbl_spleen <- compute.Venn(venn.alpha_pbl_spleen)
+gp.a_pbl_spleen <- VennThemes(gp.alpha_pbl_spleen)
+plot(venn.alpha_pbl_spleen, show=list(Universe=FALSE))
+
+
+
+```
+
+# Venn diagram: closing peaks
+
+```{r prepare_closing0, echo=TRUE, include=TRUE}
+
+tissue=c("PBL","spleen","memory","naive")
+closing0=vector("list",length(tissue))
+names(closing0)=tissue
+
+for(i in 1:length(tissue)){
+  df_of_young <- only_relevant_cols(list_of_peaks_per_tissue[["closing"]][[i]], "3mo")
+  df_of_young_fc <- only_relevant_cols(df_of_young, "FC")
+  df_of_young_pv <- only_relevant_cols(df_of_young, "p value")
+  
+  filtered_dfs <- keep_only_significant_FC_pv(df_of_young_fc, 
+                                              df_of_young_pv, 
+                                              FALSE, 
+                                              threshold = log_p_thr)
+  nice_names <- split_jaspar_name_return_df_of_names(filtered_dfs$df_FC$`Transcription factor`)
+  closing0[[i]] <- list(short_name = unique(toupper(nice_names$name)),
+                        jasp_id = unique(toupper(nice_names$`Transcription factor`)))
+}
+
+
+```
+
+```{r plot_venn_closing, include=TRUE, echo=TRUE}
+
+closing0_short <- lapply(closing0, "[[", 1)
+
+names(closing0_short) <- c("PBL", "spleen", "CD8+ memory", "CD8+ naive")
+
+number_size_c <- number_size
+text_size_c <- txt_size
+
+if(produce_plots_in_pdf){
+  pdf(file = "output/F5/mouse/mouse_venn_closing.pdf",
+      width = 7, height = 5)
+}
+venn.alpha_closing <- Venn(Sets = closing0_short)
+gp.alpha_closing <- compute.Venn(venn.alpha_closing)
+gp.a_closing <- VennThemes(gp.alpha_closing)
+
+gp_c <- VennThemes(gp.alpha_closing,increasingLineWidth=FALSE)
+# modify tissue font size
+gp_c[["SetText"]][["Set1"]]$cex <- text_size_c
+gp_c[["SetText"]][["Set2"]]$cex <- text_size_c
+gp_c[["SetText"]][["Set3"]]$cex <- text_size_c
+gp_c[["SetText"]][["Set4"]]$cex <- text_size_c
+
+gp_c[["SetText"]][["Set1"]]$col <- color_values[which(names(color_values) == "PBL")]
+gp_c[["Set"]][["Set1"]]$col <- color_values[which(names(color_values) == "PBL")]
+
+gp_c[["SetText"]][["Set2"]]$col <- color_values[which(names(color_values) == "spleen")]
+gp_c[["Set"]][["Set2"]]$col <- color_values[which(names(color_values) == "spleen")]
+
+gp_c[["SetText"]][["Set3"]]$col <- color_values[which(names(color_values) == "CD8.memory")]
+gp_c[["Set"]][["Set3"]]$col <- color_values[which(names(color_values) == "CD8.memory")]
+
+gp_c[["SetText"]][["Set4"]]$col <- color_values[which(names(color_values) == "CD8.naive")]
+gp_c[["Set"]][["Set4"]]$col <- color_values[which(names(color_values) == "CD8.naive")]
+
+# modify tissue label positions
+labs_c <- VennGetSetLabels(gp.alpha_closing)
+labs_c$x <- c(1.3, 0.2, -1.5, -6) #c("PBL", "spleen", "CD8+ memory", "CD8+\nnaive")
+labs_c$y <- c(0, -2.5, 3, 0.4)#c(1.1, 0.4, -3.3, -2) # c("PBL", "spleen", "CD8+ memory", "CD8+\nnaive")
+gp.alpha_closing <- VennSetSetLabels(gp.alpha_closing, labs_c)
+
+gp_c[["FaceText"]][["1100"]]$fontsize <- number_size
+gp_c[["Face"]][["1100"]]$fill <- "#284D64"#133C55" #very dark #364B7F" #"#4C5F8D"#0A2463"
+
+gp_c[["FaceText"]][["0010"]]$fontsize <- number_size
+gp_c[["Face"]][["0010"]]$fill <- "#84D2F6"#30ADF2"
+
+gp_c[["FaceText"]][["0011"]]$fontsize <- number_size
+gp_c[["Face"]][["0011"]]$fill <- "#386FA4" #also dark #"#285D82"#3E92CC"
+
+gp_c[["FaceText"]][["0001"]]$fontsize <- number_size
+gp_c[["Face"]][["0001"]]$fill <- "#59A5D8" #9BC4E2"
+
+gp_c[["FaceText"]][["0100"]]$fontsize <- number_size
+gp_c[["Face"]][["0100"]]$fill <-"#91E5F6" #"#3A75C4"
+
+
+# modify intersect numbers positions
+#labs_intersect <- VennGetFaceLabels(gp.alpha)
+#labs_intersect$x <- c(-4, 3.5, 2, 0) # naive, spleen, memory, pbl, bckgrnd
+#x
+gp.alpha_closing@ FaceLabels[,3]  <- c(-4, -2.5, -1.3,  0.33,  1,  2)
+  
+  #labs_intersect$x
+#labs_intersect$y <- labs_intersect$y
+# y
+gp.alpha_closing@ FaceLabels[,4]  <- c(-1,  2.5,  0.4, -1, -0.25,  0)
+
+
+grid.newpage()
+plot(gp.alpha_closing, 
+     gp = gp_c,
+     show=list(Universe=FALSE,
+     DarkMatter = FALSE))
+
+
+#closing0_short
+
+intersect_PBL_spleen <- intersect(closing0_short$PBL, closing0_short$spleen)
+
+closing_spleen_only <- setdiff(closing0_short$spleen, intersect_PBL_spleen)
+
+intersect_CD8 <- intersect(closing0_short$`CD8+ memory`, closing0_short$`CD8+ naive`)
+
+closing_CD8M_only <- setdiff(closing0_short$`CD8+ memory`, intersect_CD8)
+
+closing_CD8N_only <- setdiff(closing0_short$`CD8+ naive`, intersect_CD8)
+
+closing_bottom_overlaps <- paste0("CD8+ naive only (", length(closing_CD8N_only), "): ", paste0(closing_CD8N_only, collapse = ", "), "\n",
+                                  "CD8+ memory only (", length(closing_CD8M_only),"): ", paste0(closing_CD8M_only, collapse = ", "), "\n",
+                                  "Spleen only (", length(closing_spleen_only), "): ", paste0(closing_spleen_only, collapse = ", "), "\n",
+                                  "Intersect of CD8+ (", length(intersect_CD8), "): ", paste0(intersect_CD8, collapse = ", "), "\n",
+                                  "Intersect of PBL and spleen (", length(intersect_PBL_spleen), "): ", paste0(intersect_PBL_spleen, collapse = ", "))
+
+gridExtra::grid.arrange(grid::grid.grabExpr(plot(gp.alpha_closing,
+     gp = gp_c,
+     show=list(Universe=FALSE))), 
+                          top=textGrob(paste0("Closing peaks in young, log p value threshold: ", round(log_p_thr, digits = 3)),
+                                       gp=gpar(fontsize=15)),
+                          bottom = textGrob(closing_bottom_overlaps))
+
+
+
+if(produce_plots_in_pdf){
+  dev.off()
+}
+```
+
+```{r plot_venn_spleen_mem_naive, include=FALSE, echo=FALSE}
+closing_sub <- closing0
+
+# closing_spleen_mem_naive <- closing_sub
+# closing_spleen_mem_naive[[1]]=NULL
+# venn.alpha_c_spleen_mem_naive <- Venn(SetNames = tissue[-1],Sets = closing_spleen_mem_naive)
+# gp.alpha_c_spleen_mem_naive <- compute.Venn(venn.alpha_c_spleen_mem_naive)
+# gp.a <- VennThemes(gp.alpha_c_spleen_mem_naive)
+# plot(venn.alpha_c_spleen_mem_naive, show=list(Universe=FALSE))
+
+```
+
+```{r plot_venn_closing_pbl_spleen, include=FALSE, echo=FALSE}
+
+# closing_pbl_spleen <- closing_sub
+# closing_pbl_spleen[[3]]=closing_pbl_spleen[[4]]=NULL
+# 
+# venn.alpha_c_pbl_spleen <- Venn(SetNames = tissue[-(3:4)],Sets = closing_pbl_spleen)
+# gp.alpha_c_pbl_spleen <- compute.Venn(venn.alpha_c_pbl_spleen)
+# gp.a_c_pbl_spleen <- VennThemes(gp.alpha_c_pbl_spleen)
+# plot(venn.alpha_c_pbl_spleen, show=list(Universe=FALSE))
+# 
+# if(produce_plots_in_pdf){
+#   dev.off()  
+# }
+
+```
+
+```{r Total number of called TFs}
+TFs.called <- read.table("data/mouse_aging_footprint/total_called_TF_num.txt", header = TRUE) %>%
+  filter(Age != "12mo") %>% 
+  group_by(Strain, TCT, Age) %>% 
+  summarise(Total.TFs = sum(Total.TFs.called))
+
+TFs.called$Age <- factor(TFs.called$Age, levels = c("3mo", "18mo"), labels = c(3,18))
+
+pdf("output/F5/TF_Footprint_Mice_Common_Signatures/Barplot_Total_Called_TFs.pdf", width = 7, height = 5)
+ggplot(TFs.called, aes(Age, Total.TFs, fill = Age)) + geom_bar(stat = "identity") + facet_wrap(~ Strain + TCT, scales = "free_x", nrow = 1) + scale_fill_manual(values = color_values) + theme_minimal()
+dev.off()
+```
+
+
+```{r AP1-related TFs counts}
+paths <- list.files("data/mouse_aging_footprint/TFcounts", full.names = T)
+
+TFnames<- list.files("data/mouse_aging_footprint/TFcounts") %>% gsub("count.txt", "",. , fixed = T)
+
+results <- lapply(paths, function(x){
+  TF.num <- read.table(x, header = FALSE) 
+  res <- data.frame()
+  for (i in seq(1, nrow(TF.num))){
+    y <- strsplit(TF.num[i,], ":", fixed = T)[[1]]
+    res1 <- c(strsplit(y[1], "_", fixed = T)[[1]][c(2,3,4,5)], y[2])
+    res <- rbind(res, res1)
+  }
+  
+  colnames(res) <- c("TCT","Age", "Sex", "Strain", "Count")
+  return(res)
+})
+
+names(results) <- TFnames
+
+results <- bind_rows(results, .id = "TF")
+
+results$Age <- factor(results$Age, levels = c("3mo", "18mo"), labels = c(3,18))
+
+results.summary <- results %>% 
+  filter(Age != "12mo") %>% 
+  group_by(TF, Strain, TCT, Age) %>% 
+  summarise(Total = sum(as.numeric(Count)))
+
+
+results.summary <- merge(results.summary, TFs.called, by = c("Strain", "TCT", "Age"))
+
+results.summary$TCT[results.summary$TCT == "memory"]<- "CD8+ Memory"
+results.summary$TCT[results.summary$TCT == "naive"]<- "CD8+ Naive"
+results.summary$TCT[results.summary$TCT == "spleen"]<- "Spleen"
+
+plots <- lapply(TFnames, function(x){
+  ggplot(results.summary %>% filter(TF == x), aes(Age, Total, fill = Age)) + geom_bar(stat = "identity") + facet_wrap(~ Strain + TCT, scales = "free_x", nrow = 2) + scale_fill_manual(values = color_values) + theme_minimal() + ggtitle(x) + ylab("# of TFs")
+ 
+})
+
+pdf("output/F5/AP1_TF_Nums_with_age.pdf", width = 5, height = 5)
+print(plots)
+dev.off()
+
+results.summary$Percentage.TF <- results.summary$Total / results.summary$Total.TFs * 100
+
+plots <- lapply(TFnames, function(x){
+  ggplot(results.summary %>% filter(TF == x & Strain == "B6"), aes(Age, Percentage.TF, fill = Age)) + geom_bar(stat = "identity") + facet_wrap(~ Strain + TCT, scales = "free_x", nrow = 2) + scale_fill_manual(values = color_values) + theme_minimal() + ggtitle(x) + ylab("% of total TFs")
+})
+
+
+pdf("output/F5/AP1_TF_percentages_with_age.pdf", width = 5, height = 5)
+print(plots)
+dev.off()
+
+
+RmType <- function(string) {
+  sub("._", "", string)
+}
+
+
+pdf("output/F5/AP1_TF_percentages_with_age_B6_ALL.pdf", width = 9, height = 6.2)
+ggplot(results.summary %>% filter (Strain == "B6"), aes(Age, Percentage.TF, fill = Age)) + geom_bar(stat = "identity") + facet_grid(c("TCT", "TF"), labeller = labeller(BothLabels = RmType) ) + scale_fill_manual(values = color_values) + theme_minimal(base_size = 16) + ylab("% of total TFs") + scale_y_continuous(breaks=c(0, 0.20)) 
+dev.off()
+
+writexl::write_xlsx(results.summary, path = "Supplementary/Summary Tables/Table S7 (Number of TFs).xlsx")
+
+```
+
+
+```{r ATAC-seq NFkB peaks}
+
+library(ChIPseeker)
+library(GenomicRanges)
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+
+genome <- cinaR::grcm38
+nfkb.genes <-  c("NFKBIA", "NFKBIE", "RELA", "REL", "NFKB1", "IKBKG","CHUK", "IKBKB")
+
+TF.files <- list.files("output/F5/TF_Footprint_Mice_Common_Signatures/", recursive = T, pattern = "sub", full.names = T)
+
+nfkb.tf.nums <- lapply(TF.files, function(x){
+  a <- read.csv(x, sep = "\t")
+  
+  message("Reading: ", x)
+  
+  peaks <- a[, c(1:3)]
+  
+  colnames(peaks) <- c("Chr","Start", "End")
+  
+  peaks.annotated <- annotatePeak(GRanges(peaks), TxDb = TxDb.Mmusculus.UCSC.mm10.knownGene, verbose = F)
+  
+  
+  annoPeaks.anno <- peaks.annotated@anno
+  entrezids <- unique(annoPeaks.anno$geneId)
+  
+  # entrez to gene name mapping
+  entrez2gene <-
+    base::subset(genome,
+                 genome$entrez %in% entrezids,
+                 select = c('entrez', 'HGNC.symbol'))
+  
+  # Match to each annotation dataframe
+  m <- match(annoPeaks.anno$geneId, entrez2gene$entrez)
+  annoPeaks.anno$gene_name <- entrez2gene$HGNC.symbol[m]
+  
+  annoPeaks.anno <- data.frame(annoPeaks.anno)
+  
+  # check 5K region
+  annoPeaks.anno <- annoPeaks.anno[abs(annoPeaks.anno$distanceToTSS) <= 5e3, ]
+  
+  
+  return(sum(annoPeaks.anno$gene_name %in% nfkb.genes))
+})
+
+TF.files.2 <- list.files("output/F5/TF_Footprint_Mice_Common_Signatures/", recursive = T, pattern = "sub", full.names = F)
+
+names(nfkb.tf.nums) <- strsplit(TF.files.2, "/", fixed = T) %>% sapply(function(x){x[2]})
+
+nfkb.df <- dplyr::bind_rows(nfkb.tf.nums, .id = "TF.names") %>% t %>% data.frame
+
+nfkb.df$names <- rownames(nfkb.df)
+
+rownames(nfkb.df) <- NULL
+
+write.csv(nfkb.df, "output/F5/TF_Footprint_Mice_Common_Signatures/NFKB_shared_TF_nums_5K.csv")
+```
+
+
+
+

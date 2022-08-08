@@ -1,0 +1,940 @@
+---
+title: "Differential Analysis"
+author: "EO Karakaslar"
+date: "9/18/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+require(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+opts_knit$set(root.dir = "/Users/karako/Dropbox (JAX)/MouseAging_clean/") #set root dir!
+```
+
+```{r library}
+library(useR)  # for clear function, you can delete this one.
+library(edgeR) # finding Differentially Expressed genes
+library(limma) # for quantile normalization
+library(dplyr) # using pipe (%>%) and select
+library(ggpubr)
+library(ggplot2) 
+library(writexl) 
+library(tidyverse)
+library(preprocessCore)
+```
+
+```{r DE_fit}
+
+#' Differential Expression Analysis
+#'
+#' This function takes a count matrix, normalizes it with TMM and returns a fit matrix
+#' 
+#' @param data raw count matrix, rownames should be Gene IDs
+#' @param specs specialities of mice: age, gender, strain
+#' @return fit matrix which can be used later for differential analysis
+
+DE_fit <- function(bed, specs){
+  y       <- DGEList(counts = bed)  
+  keep    <- filterByExpr(y, min.count = 1)
+  y       <- y[keep,,keep.lib.sizes = F]
+  y       <- calcNormFactors(object = y, method = "TMM")
+  group   <- factor(paste(specs$GENDER,specs$AGE,specs$TYPE,sep="."))
+  design  <- model.matrix(~0+group)
+  colnames(design) <- levels(group)
+  y       <- estimateDisp(y, design) 
+  fit     <- glmQLFit(y, design, robust = TRUE) # recommended in edgeR manual 4.4.7
+  return (fit)
+} 
+```
+
+```{r DE_fit_quantile}
+
+#' Differential Expression Analysis
+#'
+#' This function takes a count matrix normalizes it with quantile normalization and
+#' return fit matrix.
+#' 
+#' @param data raw count matrix, rownames should be Gene IDs
+#' @param specs specialities of mice: age, gender, strain
+#' @return fit matrix which can be used later for differential analysis
+
+  DE_fit_quantile <- function(bed, specs){
+  y       <- DGEList(counts = bed)  
+  keep    <- filterByExpr(y, min.count=1)
+  y       <- y[keep,,keep.lib.sizes=F]
+  y       <- calcNormFactors(object = y, method = "none")
+  group   <- factor(paste(specs$GENDER,specs$AGE,specs$TYPE,sep="."))
+  design  <- model.matrix(~0+group)
+  colnames(design) <- levels(group)
+  rownames(design) <- colnames(bed)
+  v       <- voom(y,design,plot = F, normalize.method ="quantile")
+  fit     <- lmFit(v, design)
+  fit$aveLogCPM    <- aveLogCPM(bed)
+  return (fit)
+} 
+```
+
+```{r DE_test}
+#' @param fit matrix containing model parameters and design matrix
+#' @param contrast DE contrast
+#' @return qlm f-test in edgeR (qlf)
+DE_test <- function(fit, contrast ="Gender_3.B6"){
+  contrasts.age_sex_str <- makeContrasts(
+    Gender_3.B6    = (M.3.B6   - F.3.B6),
+    Gender_3.NZO   = (M.3.NZO  - F.3.NZO),
+    Gender_18.B6   = (M.18.B6  - F.18.B6),
+    Gender_18.NZO  = (M.18.NZO - F.18.NZO),
+    
+    Age18vs3_M.B6  = (M.18.B6  - M.3.B6),
+    Age18vs3_M.NZO = (M.18.NZO - M.3.NZO),
+    Age18vs3_F.B6  = (F.18.B6  - F.3.B6),
+    Age18vs3_F.NZO = (F.18.NZO - F.3.NZO),
+  levels = fit$design)
+  
+  qlf <- glmQLFTest(fit, contrast = contrasts.age_sex_str[, contrast])
+  return(qlf)
+}
+```
+
+
+```{r}
+bed_to_homer <-function(bed, filename = NULL){
+    
+  options(scipen=999) # prevent scientific notation because it may cause problems.
+  meta <- bed [,c(1:3)]
+  if (nrow(meta) <= 0) {
+      stop("Couldn't parse bed file!")
+  }
+  if (length(grep("[A-Za-z]", meta[,1])) == 0 ){ #check if includes chr
+    meta[,1] <- paste0("chr", meta[,1]) 
+  }
+  chrList  <- list()
+  uniqueID <- list()
+  counter  <- 0 
+  for (col in as.character((unlist(meta[,1])))){
+    
+    if (is.null(chrList[[(col)]])){
+      chrList[[(col)]] <- 1
+    } else {
+      chrList[[(col)]] <- chrList[[col]] + 1
+    }
+    counter <- counter + 1
+    uniqueID[[counter]] <- chrList[[(col)]]
+  }
+  
+  tbl <- meta %>% mutate(Strand = ".", UniqueID=paste0(Chr, "-", uniqueID %>% unlist)) %>% 
+    dplyr::select(UniqueID, everything())
+    if (!is.null(filename)){
+        write.table(x = tbl, file = filename,
+              sep = "\t", row.names = FALSE,quote= FALSE, col.names = TRUE)
+    }
+  options(scipen=0)
+  return(tbl)
+}
+```
+
+
+```{r DE_test_quantile}
+DE_test_quantile <- function (fit, contrast = "Gender_3.B6"){
+  contrasts.age_sex_str <- makeContrasts(
+    Gender_3.B6    = (M.3.B6   - F.3.B6),
+    Gender_3.NZO   = (M.3.NZO  - F.3.NZO),
+    Gender_18.B6   = (M.18.B6  - F.18.B6),
+    Gender_18.NZO  = (M.18.NZO - F.18.NZO),
+    
+    Age18vs3_M.B6  = (M.18.B6  - M.3.B6),
+    Age18vs3_M.NZO = (M.18.NZO - M.3.NZO),
+    Age18vs3_F.B6  = (F.18.B6  - F.3.B6),
+    Age18vs3_F.NZO = (F.18.NZO - F.3.NZO),
+  levels = fit$design)
+  
+  tmp <- contrasts.fit(fit, contrasts.age_sex_str[, contrast])
+  tmp <- eBayes(tmp)
+  return (tmp)
+}
+
+```
+
+
+```{r DE_toptags}
+#' @param adjust.method default is BH, check p.adjust doc for more
+#' @param p.value determines FDR threshold
+#' @param n number of returned genes
+DE_toptags <- function(qlf, p.value = 1, adjust.method = "BH", n = Inf){
+  top.tags <- topTags(qlf, n = n, adjust.method = adjust.method, p.value = p.value)
+  return (top.tags)
+}
+```
+
+```{r DE_toptags_quantile}
+DE_toptags_quantile <- function (tmp, sort.by = "p", n = Inf, p.value = 1){
+  top.table <- topTable(tmp, sort.by = sort.by, n = Inf, p.value = p.value)
+  return(top.table)
+}
+```
+
+```{r DE_plot}
+DE_plot <- function(qlf, contrast, tissue_cell_type){
+  
+  comparison <- str_split(contrast, "_")[[1]]
+  title <- paste0(comparison[1], " comparison for ", comparison[2],
+                  " - ",toupper(tissue_cell_type))
+  ggsave(paste0('output/F3/', contrast, '-', toupper(tissue_cell_type), '.pdf'),
+        plot = plotMD(qlf, main = title),
+        units = "in",
+        width = 6.5,
+        height = 4,
+        useDingbats = FALSE
+        )
+  
+  png(
+    filename = paste0('output/F3/', contrast, '-', toupper(tissue_cell_type), '.png'),
+         units = 'in',
+         width = 6.5, 
+         height = 4,
+         res = 300
+  )
+  
+  plotMD(qlf, main = title) + abline(h=0, col = "gray")
+  while (!is.null(dev.list()))  dev.off()
+
+}
+```
+
+```{r MA_plot_quantile}
+MA_plot_quantile <- function(file.name, fit, top.table, fdr.cutoff = 0.05, logfc.cutoff = 0){
+  
+  top.table$Status <- "Non"
+  top.table$Status[top.table$adj.P.Val < fdr.cutoff & top.table$logFC >      logfc.cutoff] <- "Opening"
+  top.table$Status[top.table$adj.P.Val < fdr.cutoff & top.table$logFC < (-1)*logfc.cutoff] <- "Closing"
+  top.table$Status <- factor(top.table$Status ,levels = c("Opening", "Non", "Closing"))
+  
+  top.table$aveLogCPM <- fit$aveLogCPM[rownames(top.table) %>% as.numeric()]
+  
+  top.table.non <- top.table[top.table$Status == "Non",]
+  top.table.open <- top.table[top.table$Status == "Opening",]
+  top.table.close <- top.table[top.table$Status == "Closing",]
+  
+  
+  p_ma.plot <- ggplot() + 
+    geom_point(data = top.table.non, aes(x=aveLogCPM, y=logFC, color = Status)) + 
+    geom_point(data = top.table.close, aes(x=aveLogCPM, y=logFC, color = Status)) +
+    geom_point(data = top.table.open, aes(x=aveLogCPM, y=logFC, color = Status)) +
+    scale_color_manual(values = c("#393ee3", "#000000", "#cc0447")) + theme_minimal()+
+    xlab("Average Log CPM") + ylab("Log2 Fold Change")
+  
+  ggsave(filename = file.name, plot = p_ma.plot, width = 8, height = 6)
+}
+```
+
+
+
+```{r DE_lookup_genes}
+
+#' This function takes a peak table, splits it into two according to its fold changes and convert these two into two annotated gene lists.
+DE_annotate_genes <- function (top.table, meta, homer_table, tss_cutoff = 50e+3) {
+  # let's say we compare age, old vs young, then if log2 fold change for a peak is bigger than one, it means that the peak in old ones is expressed at least two times more compared to that peak in young ones. So, they are opening peaks in older ones.
+  
+  if(nrow(top.table) == 0) return (NULL)
+  
+  opening_peaks_locs <- top.table["logFC"] >  0 
+  closing_peaks_locs <- top.table["logFC"] <  0
+  
+  opening_peaks <- top.table[opening_peaks_locs, ]
+  closing_peaks <- top.table[closing_peaks_locs, ]
+  
+  op_homer_table_locs <- homer_table[,1] %in% meta[rownames(opening_peaks), "UniqueID"]
+  cp_homer_table_locs <- homer_table[,1] %in% meta[rownames(closing_peaks), "UniqueID"]
+  
+  op_genes <- homer_table[op_homer_table_locs, c("Gene.Name", "Gene.Alias", "Distance.to.TSS")]
+  cp_genes <- homer_table[cp_homer_table_locs, c("Gene.Name", "Gene.Alias", "Distance.to.TSS")]
+  
+  # add the peaks and their p vals
+  op_genes <- cbind (op_genes, opening_peaks)
+  cp_genes <- cbind (cp_genes, closing_peaks)
+  
+  # If distance to transcription start site is more than cutoff eliminate those peaks.
+  op_genes <- dplyr::filter(op_genes, abs(Distance.to.TSS) < tss_cutoff) 
+  cp_genes <- dplyr::filter(cp_genes, abs(Distance.to.TSS) < tss_cutoff)
+  
+  # Order according to TSS
+  op_genes <- op_genes [order(abs(op_genes$Distance.to.TSS)),]
+  cp_genes <- cp_genes [order(abs(cp_genes$Distance.to.TSS)),]
+  
+  # remove duplicated genes.
+  op_genes <- op_genes[!duplicated(op_genes[,"Gene.Name"]),]
+  cp_genes <- cp_genes[!duplicated(cp_genes[,"Gene.Name"]),]
+  
+  return(list(op_genes = op_genes, cp_genes = cp_genes))
+}
+
+```
+
+```{r DE_correlation}
+#' To test whether the quantile normalization is not doing something bizarre,
+#' we can check the pearson correlations of log fold changes which are produced by
+#' TMM and quantile normalization
+#' @param fit_cache given a parameter it will record trained models for each tissue.
+#' @param tissue_cell_type pbl, spleen, naive, memory, bm
+#' @return None
+
+DE_correlation <- function(tissue_cell_type, fit_cache = NULL){
+  
+  result <- preprocess_data(tissue_cell_type)
+  bed <- result$bed
+  specs <- result$specs
+  
+  fit_tmm <- DE_fit(bed, specs)
+  fit_qua <- DE_fit_quantile(bed, specs)
+  
+  contrasts <- c( "Gender_3.B6"    ,   
+                  "Gender_3.NZO"   ,
+                  "Gender_18.B6"   ,
+                  "Gender_18.NZO"  ,
+                  "Age18vs3_M.B6"  ,
+                  "Age18vs3_M.NZO" ,
+                  "Age18vs3_F.B6"  ,
+                  "Age18vs3_F.NZO" )
+  lapply(contrasts, function(contrast, tissue_cell_type, meta){
+    # test same 
+    qlf <- DE_test(fit_tmm, contrast)
+    top.tags <- DE_toptags(qlf)
+    
+    tmp <- DE_test_quantile(fit_qua, contrast)
+    top.table <- DE_toptags_quantile(tmp)
+    
+    # reorder both tables according to peakIDs
+    top.table <- top.table[ order(as.numeric(row.names(top.table))),]
+    top.tags <- top.tags[ order(as.numeric(row.names(top.tags))),]
+    
+    mydata <- data.frame("quantile" = top.table$logFC, "tmm" = top.tags$table$logFC)
+    
+    p_corr <- ggscatter(mydata, x = "quantile", y = "tmm", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "logFC (quantile)", ylab = "logFC (tmm)")
+    
+    ggsave(filename = paste0('output/F3/TMM_Quantile_Correlations/', contrast, '-', toupper(tissue_cell_type), '_correlation.png'),
+       plot = p_corr,
+       units = "in",
+       width = 5, 
+       height = 3.2,
+       dpi = 300)
+  }, tissue_cell_type, meta)
+}
+
+
+```
+
+```{r preprocess_data}
+
+preprocess_data <- function(tissue_cell_type, exp_type="ATAC"){
+  if (exp_type == "ATAC"){
+    
+    cat  (paste0("Loading ATACseq data for: ", toupper(tissue_cell_type), "\n"))
+    load (paste0("./data/ATACseq/F3_input/Consensus Peaks/atac_seq_consensus_",tissue_cell_type,'.RData'))
+    cat("Bed file is loaded!\n")
+    meta  <- bed_to_homer(bed)
+    cat("Meta data is created!\n")
+
+    #remove chrX and chrY 
+    bed <- bed [!bed$Chr %in% c("chrX", "chrY"),]
+    meta<- meta[!meta$Chr %in% c("chrX", "chrY"),]
+    
+    bed   <- bed[,-(1:3)]
+    
+    sample_atac <- colnames(bed) %>% strsplit("-")
+    STRAIN = TYPE <- sapply(sample_atac, function(x){
+      x[1]
+    })
+    
+    AGE    <- sapply(sample_atac, function(x){
+      as.numeric(gsub("([0-9]+).*$", "\\1", x[2] %>% trimws)) 
+    }) 
+    
+    GENDER <- sapply(sample_atac, function(x){
+      x[3]
+    }) 
+    
+    TISSUE <- sapply(sample_atac, function(x){
+      x[4]
+    }) 
+    
+    SAMPLEMOUSEID <- sapply(sample_atac, function(x){
+      x[5]
+    }) 
+    
+    specs = NULL
+    specs$STRAIN <- STRAIN
+    specs$TYPE   <- TYPE
+    specs$AGE    <- AGE
+    specs$GENDER <- GENDER 
+    specs$TISSUE <- TISSUE
+    specs$SAMPLEMOUSEID <- SAMPLEMOUSEID
+  }
+  result <- list(bed=bed,meta=meta, specs=specs)
+  return (result)
+}
+
+```
+
+```{r Create Bar Plots}
+#' bars represent total consensus peaks (up-non-down)
+#' n: number of samples for given bar
+#' across 5 different tissues
+create_bar_plots <- function(tissue_cell_type, fit_cache){
+  
+  data  <- preprocess_data(tissue_cell_type)
+  bed   <- data$bed
+  specs <- data$specs
+  meta  <- data$meta
+  fit   <- fit_cache[[tissue_cell_type]] # only works if there is a fit_cache!
+  
+  contrasts <- c( "Gender_3.B6"    ,   
+                  "Gender_3.NZO"   ,
+                  "Gender_18.B6"   ,
+                  "Gender_18.NZO"  ,
+                  "Age18vs3_M.B6"  ,
+                  "Age18vs3_M.NZO" ,
+                  "Age18vs3_F.B6"  ,
+                  "Age18vs3_F.NZO" )
+  bar.plots <- lapply(contrasts, function(contrast_name, tissue_cell_type){
+    tmp       <- DE_test_quantile(fit, contrast_name)
+    top.table <- DE_toptags_quantile(tmp)
+    n1        <- sum(tmp$design[,tmp$contrast!=0][,1])
+    n2        <- sum(tmp$design[,tmp$contrast!=0][,2])
+    n_total   <- n1 + n2
+    bar.plot.attr <- list(top.table = top.table, n1=n1, n2=n2, n_total=n_total,
+                          tissue_cell_type = tissue_cell_type, contrast_name=contrast_name)
+    
+    return(bar.plot.attr)
+  }, tissue_cell_type)
+  
+  names(bar.plots) <- contrasts
+  return(bar.plots)
+}
+```
+
+```{r draw_bar_plots}
+#' @param all_bar_plots these plots are created with create_bar_plots and they are for 8 contrasts across 5 different tissue/cell types resulting in 40 different plots.
+draw_bar_plots <- function(all_bar_plots){
+  
+  refactor_and_plot_list <- function (list_){
+    
+    refactored_list <- sapply(list_, function(el){
+      total  <- nrow(el[[1]]$top.table)
+      up     <- sum(el[[1]]$top.table$logFC > 1)
+      down   <- sum(el[[1]]$top.table$logFC < -1)
+      non    <- total - up - down
+      n1     <- el[[1]]$n1
+      n2     <- el[[1]]$n2
+      tissue <- str_to_title(el[[1]]$tissue_cell_type)
+      contrast <- el[[1]]$contrast_name
+      return(c(contrast,tissue, n1,n2, total, up, down, non))
+    })
+    df_ <- data.frame(t(refactored_list))
+    colnames(df_) <- c( "Contrast", "Tissue", "n1", "n2", "Total", "Up", "Down", "Non")
+    cols  <- c("Up", "Down", "Non")
+    n_1   <- df_$n1
+    n_2   <- df_$n2
+    group <- factor(rep(cols,nrow(df_)), levels = c("Up", "Down", "Non"))
+    df_$Counts <- apply(df_[, cols],1, paste, collapse = ",") 
+    df_ <- df_ %>% 
+      mutate(Counts=strsplit(Counts, ",")) %>% 
+      unnest(Counts)
+
+    df_$Group <- group
+    df_$Counts <- df_$Counts %>% as.numeric
+    
+    X  <- split(df_, df_$Contrast) # split into contrasts
+    X1 <- X[[1]]
+    X2 <- X[[2]]
+    
+    X1_ticks <- paste0(X1$Tissue, "\n",X1$n1, "-", X1$n2)[seq(1,nrow(X1), 3)]
+    X2_ticks <- paste0(X2$Tissue, "\n",X2$n1, "-", X2$n2)[seq(1,nrow(X2), 3)]
+    breaks=c("Bm", "Memory", "Naive", "Pbl", "Spleen")
+    
+    title_p1 <- X1$Contrast %>% unique %>% toString
+    p1 <- ggplot(X1, aes(fill=Group, y=Counts, x=Tissue)) + 
+      theme(legend.title = element_blank()) +
+      geom_bar(position ="stack", stat="identity") +
+      xlab("") + ylab("Peak Counts") +
+      ggtitle(title_p1) +
+      scale_x_discrete(breaks=breaks,
+        labels=X1_ticks)
+    
+    ggsave(paste0("output/F3/Barplots/", title_p1, ".pdf"),
+         plot = p1,
+         units = "in",
+         width = 6, 
+         height = 3.2,
+         useDingbats = FALSE)
+  
+    ggsave(paste0("output/F3/Barplots/", title_p1, ".png"),
+         plot = p1,
+         units = "in",
+         width = 6, 
+         height = 3.2,
+         dpi = 300)
+    
+    title_p2 <- X2$Contrast %>% unique %>% toString
+    p2 <- ggplot(X2, aes(fill=Group, y=Counts, x=Tissue)) + 
+      theme(legend.title = element_blank()) +
+      geom_bar(position ="stack", stat="identity") +
+      xlab("") + ylab("Peak Counts") + 
+      ggtitle(title_p2) +
+      scale_x_discrete(breaks=breaks,
+        labels=X2_ticks)
+    
+    ggsave(paste0("output/F3/Barplots/", title_p2, ".pdf"),
+         plot = p2,
+         units = "in",
+         width = 6, 
+         height = 3.2,
+         useDingbats = FALSE)
+  
+    ggsave(paste0("output/F3/Barplots/", title_p2, ".png"),
+         plot = p2,
+         units = "in",
+         width = 6, 
+         height = 3.2,
+         dpi = 300)
+    
+  }
+  
+  # age_b6, age_nzo, gender_b6, gender_nzo
+  list_age_b6 <- sapply(all_bar_plots, function(tst){
+    list(tst["Age18vs3_M.B6"], tst["Age18vs3_F.B6"])
+  })
+  refactor_and_plot_list(list_age_b6)
+  
+  list_age_nzo <- sapply(all_bar_plots, function(tst){
+    list(tst["Age18vs3_M.NZO"], tst["Age18vs3_F.NZO"])
+  })
+  refactor_and_plot_list(list_age_nzo)
+  
+  list_gender_b6 <- sapply(all_bar_plots, function(tst){
+    list(tst["Gender_3.B6"], tst["Gender_18.B6"])
+  })
+  refactor_and_plot_list(list_gender_b6)
+  
+  list_gender_nzo <- sapply(all_bar_plots, function(tst){
+    list(tst["Gender_3.NZO"], tst["Gender_18.NZO"])
+  })
+  refactor_and_plot_list(list_gender_nzo)
+}
+```
+
+```{r convert_genesets}
+# Basic function to convert human to mouse gene names
+convertHumanGeneList <- function(x){
+
+x_genename <- x [,"GeneName"] %>% unique
+
+require("biomaRt")
+if (!exists("human")){
+  assign( x     = "human", 
+          value = useMart("ensembl", dataset = "hsapiens_gene_ensembl"),
+          envir = .GlobalEnv)
+  cat("Human Genes are imported...\n")
+}
+if (!exists("mouse")){
+  assign( x     = "mouse",
+          value = useMart("ensembl", dataset = "mmusculus_gene_ensembl"),
+          envir = .GlobalEnv)
+  cat("Mouse Genes are imported...\n")
+}
+
+# map from human to mice
+genesV2 = getLDS(attributes = c("hgnc_symbol"), 
+                 filters = "hgnc_symbol", 
+                 values = x_genename , 
+                 mart = human, 
+                 attributesL = c("mgi_symbol"), 
+                 martL = mouse, uniqueRows=T)
+# each human genome should be unique, so 1 to 1 map should be possible
+# genesV2 <- genesV2[ !duplicated(genesV2$HGNC.symbol),]
+genesV2 <- genesV2[ !duplicated(genesV2$MGI.symbol),]
+
+humanx <- merge(x, genesV2, by.x = "GeneName", by.y = "HGNC.symbol")
+
+return(humanx)
+}
+
+```
+
+```{r load genesets}
+load_genesets <- function(){
+  
+  load('data/genesets/scRNA_and_DICE/geneset.info.RData')
+  
+  assign("selected_genesets", value = list(
+    scrnaseq_tcells_specific_10x   = geneset.genes.scrnaseq_tcells_specific_10x,
+    vp2008                         = geneset.genes.vp2008,
+    wp                             = geneset.genes.wp,
+    scrnaseq_tcells_expressed_10x  = geneset.genes.scrnaseq_tcells_expressed_10x,
+    scrnaseq_pbmc_top              = geneset.genes.scrnaseq_pbmc_top,
+    scrnaseq_pbmc_simple_exclusive = geneset.genes.scrnaseq_pbmc_simple_exclusive,
+    scrnaseq_pbmc_simple_specific  = geneset.genes.scrnaseq_pbmc_simple_specific,
+    #gobp                           = geneset.genes.gobp,
+    #gomf                           = geneset.genes.gomf,
+    dice_major                     = geneset.genes.dice_major
+  ), envir = .GlobalEnv)
+  
+  selected_genesets_mice <- lapply(selected_genesets, function(gs){
+    gs %>% convertHumanGeneList
+  })
+  assign("selected_genesets_mice", selected_genesets_mice, .GlobalEnv)
+  
+  assign("selected_genesets_labels", list(
+    scrnaseq_tcells_specific_10x   = geneset.names.scrnaseq_tcells_specific_10x,
+    vp2008                         = geneset.names.vp2008,
+    wp                             = geneset.names.wp,
+    scrnaseq_tcells_expressed_10x  = geneset.names.scrnaseq_tcells_expressed_10x,
+    scrnaseq_pbmc_top              = geneset.names.scrnaseq_pbmc_top,
+    scrnaseq_pbmc_simple_exclusive = geneset.names.scrnaseq_pbmc_simple_exclusive,
+    scrnaseq_pbmc_simple_specific  = geneset.names.scrnaseq_pbmc_simple_specific,
+    #gobp                           = geneset.names.gobp,
+    #gomf                           = geneset.names.gomf,
+    dice_major                     = geneset.names.dice_major
+  ), envir = .GlobalEnv) 
+  
+  assign("union_size", 
+         lapply(selected_genesets, function(gs){
+           gs[,"GeneName"]
+         }) %>% unlist(recursive = F) %>% unique %>% length, envir = .GlobalEnv)
+}
+```
+
+
+```{r check_genesets}
+check_genesets <- function (genes, tissue_cell_type, contrast){
+  
+  # Up regulated genes specs
+  genes_up_tbl   <- genes[[1]] 
+  # Down regulated genes specs
+  genes_down_tbl <- genes[[2]]
+  
+  # These are mice gene names which are differentially expressed.
+  genes_up   <- genes_up_tbl  [, "Gene.Name"] 
+  genes_down <- genes_down_tbl[, "Gene.Name"]
+  
+  # create an empty dataframe for enriched modules,
+  # so that later we can sort them and prepare excel tables, yey!
+  enriched_modules_df <- data.frame()
+  
+  # for each geneset, iterate each module
+  for (i in 1:length(selected_genesets)){
+    
+    geneset_name <- names(selected_genesets_labels)[[i]]
+    module_names <- selected_genesets_labels[[i]]
+    modules      <- selected_genesets_mice  [[i]]
+    modules <- merge(modules, module_names, by = "Module.ID")
+    
+    # here we create empty p values, geneset name vectors so that we can adjust p values later
+    module_count        <- nrow(module_names)
+    vector_p_up         <- vector_p_down <- numeric(module_count) 
+    vector_module_names <- vector_geneset_names <- character(module_count)
+    # iterate the modules
+    
+    cat ("Geneset Name:", geneset_name, "\n")
+    for (j in 1:nrow(module_names)){
+      
+      module_ID   <- module_names[j, "Module.ID"]
+      module_name <- module_names[j, "Module.Name"]
+      module      <- modules[modules$Module.ID == module_ID, "MGI.symbol"]
+      
+      # module gene count (constant for up/down)
+      gene_count_module <- unique(module) %>% length
+      
+      # upregulated gene count
+      n_up <- length(genes_up) 
+      
+      # overlapped up-regulated genes with the module
+      q_up <- genes_up %in% module %>% sum
+
+      
+      # here we calculate the probability of having a bigger intersection
+      # than the count of overlapping genes given the module size and the total gene count.
+      # we substract 1 for removing the equality when the lower.tail = F, which changes P(X<x) to 1-P(X>=x).
+      p_up <- phyper(q_up-1, gene_count_module, union_size - gene_count_module, n_up, lower.tail = F, log.p = F)
+      
+      # overlapped down-regulated genes with the module
+      q_down <- genes_down %in% module %>% sum
+      
+      # downregulated gene count
+      n_down <- length(genes_down)
+      p_down <- phyper(q_down-1, gene_count_module, union_size - gene_count_module, n_down, lower.tail = F, log.p = F)
+      
+      vector_p_up[j]          <- p_up
+      vector_p_down[j]        <- p_down
+      vector_geneset_names[j] <- names(selected_genesets)[[i]]
+      vector_module_names[j]  <- module_name
+      
+    }
+    
+    df_up   <- data.frame(geneset.name = vector_geneset_names, 
+                module.name = vector_module_names,
+                p = vector_p_up,
+                stringsAsFactors = F)
+    
+    df_down <- data.frame(geneset.name = vector_geneset_names, 
+                module.name = vector_module_names,
+                p = vector_p_down,
+                stringsAsFactors = F)
+    
+    # adjust the p-values for each module
+    df_up$adj.p   <- p.adjust(p = df_up$p  , method = "fdr")
+    df_down$adj.p <- p.adjust(p = df_down$p, method = "fdr")
+    
+    # sort according to adjusted p-values and then to p-values
+    df_up   <- df_up  [order(df_up$adj.p  , df_up$p)  ,]
+    df_down <- df_down[order(df_down$adj.p, df_down$p),]
+    
+    # this is an important parameter since it affects the number of modules that are chosen
+    fdr.threshold <- 0.05
+    
+    # check if any modules are enriched for up regulated genes
+    if (any(df_up$adj.p < fdr.threshold)){
+      
+      # take the enriched modules
+      enriched_modules <- df_up[df_up$adj.p < fdr.threshold,]
+      
+      # add enriched modules to dataframe
+      enriched_modules_df <- cbind(TCT = tissue_cell_type, 
+                                   Contrast = contrast, 
+                                   enriched_modules,
+                                   Status="Opening",
+                                   Overlapping.Genes = NA) %>% rbind(enriched_modules_df) 
+      
+      for (k in 1:nrow(enriched_modules)){
+        
+        enriched_module_name   <- enriched_modules[k, "module.name"]
+        module.genes <- modules[modules$Module.Name == enriched_module_name,]
+        module.genes <- merge(module.genes, genes_up_tbl, by.x = "MGI.symbol", by.y = "Gene.Name", all.x = T)
+        
+        enriched_modules_df$Overlapping.Genes[k] <- 
+          intersect(modules[modules$Module.Name %in% enriched_module_name,]$MGI.symbol, genes_up) %>% 
+          paste(collapse = ",")
+
+        filename <- paste0("./output/Enrichment_Analyses/fm_seperate/",
+                           tissue_cell_type,"-",contrast,
+                           "-", geneset_name,"-",
+                           gsub("/", "_", enriched_module_name),"-UpRegulated.csv")
+        write.csv(module.genes, file = filename)
+      }
+    }
+    
+    # check if any modules are enriched for down regulated genes
+    # To-Do: I know I should make this a function...
+    if (any(df_down$adj.p < fdr.threshold)){
+      
+      # take the enriched modules
+      enriched_modules <- df_down[df_down$adj.p < fdr.threshold,]
+      
+     # add enriched modules to dataframe
+      enriched_modules_df <- cbind(TCT = tissue_cell_type, 
+                                   Contrast = contrast, 
+                                   enriched_modules,
+                                   Status="closing",
+                                   Overlapping.Genes = NA) %>% rbind(enriched_modules_df)  
+      
+      for (k in 1:nrow(enriched_modules)){
+        
+        enriched_module_name   <- enriched_modules[k, "module.name"]
+        module.genes <- modules[modules$Module.Name == enriched_module_name,]
+        module.genes <- merge(module.genes, genes_down_tbl, by.x = "MGI.symbol", by.y = "Gene.Name", all.x = T)
+        
+        enriched_modules_df$Overlapping.Genes[k] <- 
+          intersect(modules[modules$Module.Name %in% enriched_module_name,]$MGI.symbol, genes_down) %>% 
+          paste(collapse = ",")
+
+        filename <- paste0("./output/Enrichment_Analyses/fm_seperate/",
+                           tissue_cell_type,"-",contrast,
+                           "-", geneset_name,"-",
+                           gsub("/", "_", enriched_module_name),"-DownRegulated.csv")
+        write.csv(module.genes, file = filename)
+      }
+    }
+  }
+  
+  if (nrow(enriched_modules_df) == 0) return (NULL)
+  return (enriched_modules_df)
+}
+```
+
+```{r}
+
+# PATH: path of the enriched modules files
+# PATH_TO_SAVE:  
+er_plot <- function(path, path_to_save){
+  
+  file_list <- list.files(path)
+  all_modules <- lapply(file_list, function(x){
+    read.csv(paste0(path, x), stringsAsFactors = F) %>% data.frame
+  })
+  
+  df <- do.call("rbind", all_modules)
+  df$TCT[df$TCT == "naive"] <- "CD8+ Naive"
+  df$TCT[df$TCT == "memory"] <- "CD8+ Memory"
+  df$TCT[df$TCT == "bm"] <- "BM"
+  df$TCT[df$TCT == "spleen"] <- "SPLEEN"
+  df$TCT[df$TCT == "pbl"] <- "PBL"
+  
+  
+  filter_tissues = T
+  if(filter_tissues){
+    df <- df [df$TCT %in% c("BM", "SPLEEN", "PBL"),] 
+  }
+  
+  df <- df[!df$Contrast %in% c("Gender_3.B6", "Gender_18.B6"),]
+  df$Contrast <- factor(df$Contrast, 
+                        levels = c("Age18vs3_F.NZO", "Age18vs3_M.NZO", "Age18vs3_F.B6", "Age18vs3_M.B6"))
+    
+  for (var in unique(df$geneset.name)){
+      p <- ggplot(df[ df$geneset.name == var,],
+                  aes(x=module.name, y=Contrast, color = Status, size = -log10(p))) + 
+        xlab("Module Names") + 
+        geom_point() + 
+        coord_flip() + 
+        ggtitle(var) + 
+        theme_minimal() +
+        facet_wrap(~TCT) + 
+        scale_color_manual(values=c("blue", "red")) + 
+        scale_y_discrete(name ="Gender", breaks=c("Age18vs3_F.NZO", "Age18vs3_M.NZO", "Age18vs3_F.B6", "Age18vs3_M.B6"),labels=c("Female(NZO)", "Male(NZO)", "Female(B6)", "Male(B6)"))
+        
+      if (var == 'wp'){
+        width_ = 20
+        height_ = 20
+      } else {
+        width_ = 10
+        height_ = 6
+      }
+      ggsave(paste0(path_to_save, var, '.pdf'),
+          plot = p,
+          units = "in",
+          width = width_,
+          height = height_,
+          useDingbats = FALSE)
+  }
+}
+```
+
+
+
+```{r run_tissue}
+
+#' @param doTMM if set TRUE, do all analyses with TMM which does not require limma package.
+#' @param fit_cache given a parameter it will record trained models for each tissue.
+#' @param tissue_cell_type pbl, spleen, naive, memory, bm
+#' @return fit model matrix
+
+run_tissue <- function(tissue_cell_type, fit_cache = NULL, plot.MA = T){
+  
+  data  <- preprocess_data (tissue_cell_type)
+  
+  filename <- paste0('data/ATACseq/F3_input/atacseq_', tissue_cell_type,'_annotated.txt')
+  homer_table <- read.csv(filename, sep = "\t")
+  cat(paste0(filename, " is loaded.\n"))
+  
+  bed <- data$bed
+  specs <- data$specs
+  meta <- data$meta
+  
+  if (is.null(fit_cache)){
+    fit <- DE_fit_quantile(bed, specs)
+  } else {
+    fit <- fit_cache[[tissue_cell_type]]
+  }
+  
+  contrasts <- c( "Gender_3.B6", "Gender_3.NZO", "Gender_18.B6", "Gender_18.NZO",
+                  "Age18vs3_M.B6", "Age18vs3_M.NZO", "Age18vs3_F.B6", "Age18vs3_F.NZO")
+  
+  fdr.cutoff <- 0.05
+  er_modules_list <- lapply(contrasts, function(contrast, tissue_cell_type, meta, homer_table){
+    
+    cat (paste0("For ", contrast,":\n"))
+    tmp       <- DE_test_quantile(fit, contrast)
+    
+    if(plot.MA){
+      top.table <- DE_toptags_quantile(tmp)
+      file.name <- paste0("output/F3/MAplots/FM_seperated/Age_Gender_Quantile/",
+                          contrast, "-", toupper(tissue_cell_type), ".png")
+      MA_plot_quantile(file.name, fit, top.table)
+    }
+    
+    top.table <- DE_toptags_quantile(tmp, p.value = fdr.cutoff)
+    cat (paste0("diff peaks(adj.p < 0.1)----", nrow(top.table),"\n"))
+    
+    if(nrow(top.table) > 0){
+      genes <- DE_annotate_genes(top.table, meta, homer_table)
+      cat (paste0("\tupreg_genes ----", genes$op_genes %>% nrow))
+      cat (paste0("\tdownreg_genes ----", genes$cp_genes %>% nrow, "\n"))
+      if (nrow(genes$op_genes) > 0 & nrow(genes$cp_genes) > 0){
+        er_modules <- check_genesets(genes, tissue_cell_type, contrast)
+        return (er_modules)
+      }
+    }
+  }, tissue_cell_type, meta, homer_table)
+  
+  # make the list a table!
+  er_modules <- do.call("rbind", er_modules_list)
+  filename_er_modules <- paste0("output/Enrichment_Analyses/fm_seperate/er_modules/",
+                                tissue_cell_type, "_er_summary.csv")
+  write.csv(er_modules, file = filename_er_modules)
+  
+  return(fit)
+}
+```
+
+```{r run analysis}
+list <- c("naive", "memory", "pbl", "spleen")
+# This is an important parameter, if you want to train all fit matrices
+# from strach you need to make this FALSE, so it won't use the cached models!
+use_fit_cache = TRUE
+load_genesets = FALSE
+# PART 1
+if (use_fit_cache){
+  load("analysis/cache/fit_matrices.RData")
+  load("analysis/cache/enrichment_analysis.Rdata")
+
+  lapply(list, function(tissue_cell_type, fit_cache){
+      run_tissue(tissue_cell_type, fit_cache)
+    }, fit_cache) %>% invisible
+
+} else {
+  if (load_genesets) {load_genesets()} else {load("analysis/cache/enrichment_analysis.Rdata")}
+  fit_cache <- lapply(list, function(tissue_cell_type){
+    run_tissue(tissue_cell_type)
+  })
+  names(fit_cache) <- list
+  save(fit_cache, file = "analysis/cache/fit_matrices.RData")
+  save(human, mouse, union_size, selected_genesets, selected_genesets_mice, selected_genesets_labels,
+       file = "analysis/cache/enrichment_analysis.Rdata")
+}
+
+# PART 2
+# Uncomment to compare TMM and Quantile Normalization
+# lapply(list, DE_correlation) %>% invisible
+  
+# PART 3
+# Barplots 
+# Before you can use it, you may need to run the PART 1 with use_fit_cache = F
+# so that a fit_cache matrix will be generated and saved.
+# if (use_fit_cache){
+#   load("analysis/cache/fit_matrices.RData")
+#   all_bar_plots <- lapply(list, function(tissue_cell_type, fit_cache){
+#     create_bar_plots(tissue_cell_type, fit_cache)
+#   }, fit_cache) %>% invisible
+#   names(all_bar_plots) <- list
+#   draw_bar_plots(all_bar_plots)
+# }
+
+er_plot("output/Enrichment_Analyses/fm_seperate/er_modules/", "output/F3/GSEA/ATACseq/fm_seperate/")
+```
+
+
+
+
+
+

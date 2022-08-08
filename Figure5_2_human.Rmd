@@ -1,0 +1,1230 @@
+---
+title: "Human transcription factors"
+author: "Lori D Kregar, Ahrim Youn, ..., Duygu Ucar"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: workflowr::wflow_html
+editor_options:
+  chunk_output_type: console
+---
+
+You essentially just need use the files in the output/F5/human/ folder.
+
+Filtered means that you first filter TFs to those which had a significant p-value, and then average them to produce the heatmaps.
+
+
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(cache=TRUE)
+#knitr::opts_chunk$set(autodep = TRUE)knitr::opts_chunk$set(cache=TRUE)
+knitr::opts_chunk$set(autodep = TRUE)
+
+opts_knit$set(root.dir = "/Users/karako/Dropbox (JAX)/MouseAging_clean/") #set root dir!
+```
+
+# Prepare the environment
+
+```{r libraries, include=TRUE, echo=TRUE}
+library(ComplexHeatmap, quietly = TRUE)
+library(circlize, quietly = TRUE)
+library(writexl, quietly = TRUE)
+library(JASPAR2018, quietly = TRUE)
+library(TFBSTools, quietly = TRUE)
+library(dplyr, quietly = TRUE)
+```
+
+
+```{r hardcoded_environment, include=TRUE, echo=TRUE, cache=FALSE}
+
+plots_in_pdf <- produce_plots_in_pdf <- TRUE
+
+cor.cutoff=0.9
+
+use_PFM_similarity_for_grouping <- TRUE
+
+change_me_to_force_sourcing_chunk <- 10
+
+source("code/TF_pfm_extension_functions.R")
+
+cat("sourced\n")
+
+```
+
+
+```{r preprocess_data, include=TRUE, echo=TRUE, results='hide'}
+# this function does the actual data processing, need not run it if you just need some plots after
+source("code/heatmap_risk_human_ldk.R")
+
+```
+
+# Opening transcription factors in humans
+
+```{r load_data, include=TRUE, echo=FALSE}
+
+opening_closing_human <- vector("list", 2)
+
+clusters_for_opening_closing <- c(7, 30)
+
+idx <- 1
+for(i in c(TRUE, FALSE)){
+  load(paste0("data/human_aging_footprint/combined_human_FC_p_CA_ha",i,".Rdata"))
+  # combine dataframe
+  
+  df_FC <- add_colnames_for_type(combined_FC, "FC ")
+  df_pvals <- add_colnames_for_type(combined_p_vals, "log p value ")
+  
+  df_both <- base::merge(as.data.frame(df_FC), 
+                         as.data.frame(df_pvals),
+                         by="row.names",
+                         all = TRUE)
+  
+  df_both <- df_both[,c( "Row.names",
+                         "FC F O",
+                          "log p value F O",
+                         "FC F Y",
+                          "log p value F Y",
+                         "FC M O",
+                          "log p value M O",
+                         "FC M Y",
+                        "log p value M Y")]
+  
+  colnames(df_both)[1] <- "Transcription factor"
+  
+  df_both[,1] <- sapply(df_both[,1], function(x){
+    return(replaced_dot_by_comma <- gsub("\\.", ", ", x))
+  })
+  
+  load(paste0("data/human_aging_footprint/raw_FC_p", i, ".Rdata"))
+  
+  df_FC_raw <- add_colnames_for_type(raw_names_FC, "FC ")
+  df_pvals_raw <- add_colnames_for_type(raw_names_pvals, "log p value ")
+  
+  df_both_raw <- merge(as.data.frame(df_FC_raw), 
+                       as.data.frame(df_pvals_raw), 
+                       by="row.names", 
+                       all = TRUE)
+  
+  df_both_raw <- df_both_raw[,c( "Row.names",
+                         "FC F O",
+                          "log p value F O",
+                         "FC F Y",
+                          "log p value F Y",
+                         "FC M O",
+                          "log p value M O",
+                         "FC M Y",
+                        "log p value M Y")]
+  
+  colnames(df_both_raw)[1] <- "Transcription factor"
+  
+  # replace concatenated jaspar names by nicer ones
+  df_both_raw_names <- split_jaspar_name_return_df_of_names(df_both_raw$`Transcription factor`)  
+  
+  df_both_raw <- merge(df_both_raw_names, df_both_raw, by = "Transcription factor")
+  
+  # merge raw by TF similarity
+  
+  raw_matrix <- subset(df_both_raw, select = -c(`Transcription factor`,
+                                                `Jaspar_matrix_ID`, `name`))
+  rownames(raw_matrix) <- df_both_raw$`Transcription factor`
+  
+  df_PFM_merged <- cluster_heatmaps_on_TF_similarity(raw_matrix)
+  as_df_PFM_merged <- as.data.frame(df_PFM_merged)
+  
+  as_df_PFM_merged$`Transcription factor` <- rownames(as_df_PFM_merged)
+  
+  as_df_PFM_merged <- as_df_PFM_merged[,c(ncol(as_df_PFM_merged), 
+                                          1:(ncol(as_df_PFM_merged)-1))]
+  
+  PBMC <- list('PBMC TF raw' = df_both_raw, 
+               'PBMC TF (PFM)' = as_df_PFM_merged,
+               'PBMC TF (corr)' = df_both)
+  
+  opening_closing_human[[idx]] <- PBMC
+  
+  PBMC[[2]] <- PBMC[[3]] <- NULL
+  
+  typeOfPeak <- ifelse(i == TRUE, "opening", "closing")
+  
+  file_name <- paste0(typeOfPeak, "_transcription_factors_FC_p_human.xlsx")
+  write_xlsx(PBMC, path = paste0("output/F5/human/", file_name))
+  
+  idx <- idx + 1
+}
+
+names(opening_closing_human) <- c("opening", "closing")
+
+save(opening_closing_human, 
+     file = "data/human_aging_footprint/human_TF_FC_p_xslx.Rdata")
+
+```
+
+```{r heatmap_plotting_function, include=TRUE, echo=TRUE}
+
+plot_HM <- function(df_of_combined_per_type, 
+                    by_age = TRUE, 
+                    isSuperLong = FALSE, 
+                    mini = 10, 
+                    only_old = FALSE,
+                    only_young = FALSE,
+                    opening_,
+                    filtered = FALSE){
+  # supply matrix of transcription factors with only FC or p values
+  
+  if(filtered == FALSE){
+    old_cols <- c(3:4)
+    young_cols <- c(1:2)
+  }else{
+    old_cols <- young_cols <- c(1:2)
+  }
+  
+  type_of_data <- ifelse(any(grepl("FC", colnames(df_of_combined_per_type))),
+                         "Fold change", "log p value")
+  
+  if(type_of_data == "Fold change"){
+    if(opening_){
+      colvec = colorRamp2(c(quantile(unlist(df_of_combined_per_type[,c(2:ncol(df_of_combined_per_type))]),0.05), 
+                quantile(unlist(df_of_combined_per_type[,c(2:ncol(df_of_combined_per_type))]),0.95)), 
+                c("#ffe6ed", "#c70039") # light and dark red for opening FC
+                )
+    }else{
+      colvec = colorRamp2(c(quantile(unlist(df_of_combined_per_type[,c(2:ncol(df_of_combined_per_type))]),0.05), 
+                quantile(unlist(df_of_combined_per_type[,c(2:ncol(df_of_combined_per_type))]),0.95)), 
+                c("#F4FAFE", "#273871") # light and dark blue for closing FC
+                )
+    }
+
+  }else{
+    if(opening_){
+      colvec=colorRamp2(c(quantile(unlist(df_of_combined_per_type[,c(2:ncol(df_of_combined_per_type))]),0.05), 
+                quantile(unlist(df_of_combined_per_type[,c(2:ncol(df_of_combined_per_type))]),0.95)), 
+                c("#fff1e6", "#e66700") # light and dark orange for opening p
+                #c("#FCF5F2", "#6D0026") # light and dark dark red
+                )
+    }else{
+      colvec=colorRamp2(c(quantile(unlist(df_of_combined_per_type[,c(2:ncol(df_of_combined_per_type))]),0.05), 
+                quantile(unlist(df_of_combined_per_type[,c(2:ncol(df_of_combined_per_type))]),0.95)), 
+                c("#e5f0db", "#587d36") #light and dark green for closing p
+                # c("#fff1e6", "#e66700") # light and dark orange for opening p
+                # c("#FCF5F2", "#6D0026") # light and dark dark red
+                )
+    }
+
+  }
+  
+  input_df <- df_of_combined_per_type
+  rownames(input_df) <- input_df[,1]
+  input_df <- input_df[,-1]
+  
+  
+  cn <- colnames(input_df)
+  
+  # change names and order depending if column ordered by gender or age
+  if(by_age){
+    # reorder columns
+    input_df <- input_df[,c(grep("Y$", cn), grep("O$", cn))]
+    
+    colnames(input_df) <- ifelse(grepl(" F ", colnames(input_df)), "Female", "Male")
+  }else{
+    # rev so that young is on left, old on right
+    input_df <- input_df[,c(rev(grep(" F ", cn)), rev(grep(" M ", cn)))]
+    
+    colnames(input_df) <- ifelse(grepl(" Y$", colnames(input_df)), "Young", "Old")
+  }
+  
+  legend_plot <-  Legend(col_fun = colvec, 
+                         title = type_of_data,
+                         legend_height = unit(4, "cm"),
+                         direction = ifelse(!opening_, "horizontal", "vertical"),
+                         title_position = ifelse(!opening_, "topcenter", "topleft")) 
+  
+  legend_x <- ifelse(opening_, 0.965, 0.8)
+  legend_y <- ifelse(opening_, 0.05, 0.02)
+  
+  if(by_age){
+    col_titles <- c("Young", "Old")
+  }else{
+    col_titles <- c("Female", "Male")
+  }
+  
+  input_df <- as.matrix(input_df)
+  
+  
+   if(isSuperLong){
+     pad <- c(2, 2, 2, 20)
+   }else{
+     pad <- rep(2,4)
+   }
+  
+  
+  if(only_old == FALSE & only_young == FALSE){
+    draw(Heatmap(input_df[,1:2], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             column_title=col_titles[1], 
+             column_title_gp = gpar(fontsize = 10),
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             col=colvec,
+             show_heatmap_legend = FALSE,
+             # row_names_max_width = max_text_width(
+             #      rownames(input_df), 
+             #      gp = gpar(fontsize = 10)),
+             row_names_gp = gpar(fontsize = mini)) +
+       Heatmap(input_df[,3:4], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             column_title=col_titles[2], 
+             column_title_gp = gpar(fontsize = 10),
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             show_heatmap_legend = FALSE,
+             # row_names_max_width = max_text_width(
+             #      rownames(input_df), 
+             #      gp = gpar(fontsize = 10)),
+             row_names_gp = gpar(fontsize = mini),
+             col=colvec),
+       padding = unit(pad, "mm"))
+  }else if(only_old){
+    draw(Heatmap(input_df[,old_cols], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             column_title="Old", 
+             column_title_gp = gpar(fontsize = 10),
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             show_heatmap_legend = FALSE,
+             # row_names_max_width = max_text_width(
+             #      rownames(input_df), 
+             #      gp = gpar(fontsize = 10)),
+             row_names_gp = gpar(fontsize = mini),
+             col=colvec),
+         padding = unit(pad, "mm"))
+  }else if(only_young){
+    draw(Heatmap(input_df[,young_cols], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             column_title="Young", 
+             column_title_gp = gpar(fontsize = 10),
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             col=colvec,
+             show_heatmap_legend = FALSE,
+             # row_names_max_width = max_text_width(
+             #      rownames(input_df), 
+             #      gp = gpar(fontsize = 10)),
+             row_names_gp = gpar(fontsize = mini)),
+         padding = unit(pad, "mm"))
+  }
+  
+  draw(legend_plot, just = c("right", "bottom"),
+     x = unit(legend_x, "npc"), y = unit(legend_y, "npc"))
+  
+  
+}
+
+
+plot_hm_side_by_side <- function(df_of_combined_per_type, df_other,
+                    by_age = TRUE, 
+                    isSuperLong = FALSE, 
+                    mini = 10, 
+                    only_old = FALSE,
+                    only_young = FALSE,
+                    opening_,
+                    filtered = FALSE){
+  
+  #df_of_combined_per_type <- list_for_xls[[1]]
+  #df_other <- list_for_xls[[2]]
+  # isSuperLong <- TRUE
+  # mini = 10
+  # only_old = FALSE
+  # only_young = TRUE
+  # opening = TRUE
+  # filtered = TRUE
+  
+  
+  # supply matrix of transcription factors with only FC or p values
+  
+  if(filtered == FALSE){
+    old_cols <- c(3:4)
+    young_cols <- c(1:2)
+  }else{
+    old_cols <- young_cols <- c(1:2)
+  }
+  
+  type_of_data <- ifelse(any(grepl("FC", colnames(df_of_combined_per_type))),
+                         "Fold change", "log p value")
+  
+  if(type_of_data == "Fold change"){
+    if(opening_){
+      colvec = colorRamp2(c(quantile(unlist(df_of_combined_per_type[,c(2:ncol(df_of_combined_per_type))]),0.05), 
+                quantile(unlist(df_of_combined_per_type[,c(2:ncol(df_of_combined_per_type))]),0.95)), 
+                c("#ffe6ed", "#c70039") # light and dark red for opening FC
+                )
+    }else{
+      colvec = colorRamp2(c(quantile(unlist(df_of_combined_per_type[,c(2:ncol(df_of_combined_per_type))]),0.05), 
+                quantile(unlist(df_of_combined_per_type[,c(2:ncol(df_of_combined_per_type))]),0.95)), 
+                c("#F4FAFE", "#273871") # light and dark blue for closing FC
+                )
+    }
+
+  }
+  #else{
+  
+  if(opening_){
+      colvec_p=colorRamp2(c(quantile(unlist(df_other[,c(2:ncol(df_other))]),0.05), 
+                quantile(unlist(df_other[,c(2:ncol(df_other))]),0.95)), 
+                c("#fff1e6", "#e66700") # light and dark orange for opening p
+                #c("#FCF5F2", "#6D0026") # light and dark dark red
+                )
+  }else{
+      colvec_p=colorRamp2(c(quantile(unlist(df_other[,c(2:ncol(df_other))]),0.05), 
+                quantile(unlist(df_other[,c(2:ncol(df_other))]),0.95)), 
+                c("#e5f0db", "#587d36") #light and dark green for closing p
+                # c("#fff1e6", "#e66700") # light and dark orange for opening p
+                # c("#FCF5F2", "#6D0026") # light and dark dark red
+                )
+  }
+
+  #}
+  
+  input_df <- df_of_combined_per_type
+  rownames(input_df) <- input_df[,1]
+  input_df <- input_df[,-1]
+  
+  input_df_other <- df_other
+  rownames(input_df_other) <- input_df_other[,1]
+  input_df_other <- input_df_other[,-1]
+  
+  
+  cn <- colnames(input_df)
+  
+  cn_p <- colnames(input_df_other)
+  
+  # change names and order depending if column ordered by gender or age
+  if(by_age){
+    # reorder columns
+    input_df <- input_df[,c(grep("Y$", cn), grep("O$", cn))]
+    colnames(input_df) <- ifelse(grepl(" F ", colnames(input_df)), "Female", "Male")
+    
+    input_df_other <- input_df_other[,c(grep("Y$", cn_p), grep("O$", cn_p))]
+    colnames(input_df_other) <- ifelse(grepl(" F ", colnames(input_df_other)), "Female", "Male")
+    
+  }else{
+    # rev so that young is on left, old on right
+    input_df <- input_df[,c(rev(grep(" F ", cn)), rev(grep(" M ", cn)))]
+    colnames(input_df) <- ifelse(grepl(" Y$", colnames(input_df)), "Young", "Old")
+    
+    input_df_other <- input_df_other[,c(rev(grep(" F ", cn_p)), rev(grep(" M ", cn_p)))]
+    colnames(input_df_other) <- ifelse(grepl(" Y$", colnames(input_df_other)), "Young", "Old")
+  }
+  
+  legend_plot <-  Legend(col_fun = colvec, 
+                         title = type_of_data,
+                         legend_height = unit(ifelse(opening_, 4, 6), "cm"),
+                         direction = ifelse(!opening_, "horizontal", "vertical"),
+                         title_position = ifelse(!opening_, "lefttop", "topcenter")) 
+  
+  legend_x <- ifelse(opening_, 0.95, 0.95)
+  legend_y <- ifelse(opening_, 0.35, 0.06)
+  
+  Legend_p <- Legend(col_fun = colvec_p, 
+                         title = "Log p value",
+                         legend_height = unit(ifelse(opening_, 4, 6), "cm"),
+                         direction = ifelse(!opening_, "horizontal", "vertical"),
+                         title_position = ifelse(!opening_, "lefttop", "topcenter")) 
+  
+  legend_x_p <- ifelse(opening_, 0.95, 0.95)
+  legend_y_p <- ifelse(opening_, 0.05, 0.015)
+  
+  
+  pd = packLegend(legend_plot, Legend_p)
+  
+  if(by_age){
+    col_titles <- c("Young", "Old")
+  }else{
+    col_titles <- c("Female", "Male")
+  }
+  
+  input_df <- as.matrix(input_df)
+  
+  input_df_other <- as.matrix(input_df_other)
+  
+   if(isSuperLong){
+     pad <- c(2, 2, 2, 20)
+   }else{
+     pad <- rep(2,4)
+   }
+  
+  
+  if(only_old == FALSE & only_young == FALSE){
+    draw(Heatmap(input_df[,1:2], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             column_title=col_titles[1], 
+             column_title_gp = gpar(fontsize = 10),
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             col=colvec,
+             show_heatmap_legend = FALSE,
+             # row_names_max_width = max_text_width(
+             #      rownames(input_df), 
+             #      gp = gpar(fontsize = 10)),
+             row_names_gp = gpar(fontsize = mini)) +
+       Heatmap(input_df[,3:4], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             column_title=col_titles[2], 
+             column_title_gp = gpar(fontsize = 10),
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             show_heatmap_legend = FALSE,
+             # row_names_max_width = max_text_width(
+             #      rownames(input_df), 
+             #      gp = gpar(fontsize = 10)),
+             row_names_gp = gpar(fontsize = mini),
+             col=colvec),
+       padding = unit(pad, "mm"))
+  }else if(only_old){
+    draw(Heatmap(input_df[,old_cols], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             #column_title="Old", 
+             column_title_gp = gpar(fontsize = 10),
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             show_heatmap_legend = FALSE,
+             # row_names_max_width = max_text_width(
+             #      rownames(input_df), 
+             #      gp = gpar(fontsize = 10)),
+             row_names_gp = gpar(fontsize = mini),
+             col=colvec) +
+          Heatmap(input_df_other[,old_cols], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             #column_title="Old", 
+             column_title_gp = gpar(fontsize = 10),
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             show_heatmap_legend = FALSE,
+             # row_names_max_width = max_text_width(
+             #      rownames(input_df), 
+             #      gp = gpar(fontsize = 10)),
+             row_names_gp = gpar(fontsize = mini),
+             col=colvec_p),
+         column_title = "Old",
+         padding = unit(pad, "mm"))
+  }else if(only_young){
+    draw(Heatmap(input_df[,young_cols], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             #column_title="Young", 
+             column_title_gp = gpar(fontsize = 10),
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             col=colvec,
+             show_heatmap_legend = FALSE,
+             # row_names_max_width = max_text_width(
+             #      rownames(input_df), 
+             #      gp = gpar(fontsize = 10)),
+             row_names_gp = gpar(fontsize = mini)) +
+           Heatmap(input_df_other[,young_cols], 
+             cluster_columns=F, 
+             cluster_rows=F, 
+             #column_title="Young", 
+             column_title_gp = gpar(fontsize = 10),
+             row_title="Transcription factors",
+             show_row_names=TRUE,
+             show_column_names = TRUE,
+             col=colvec_p,
+             show_heatmap_legend = FALSE,
+             # row_names_max_width = max_text_width(
+             #      rownames(input_df), 
+             #      gp = gpar(fontsize = 10)),
+             row_names_gp = gpar(fontsize = mini)),
+         column_title = "Young",
+         padding = unit(pad, "mm"))
+  }
+  
+  
+ # draw(pd, just = c("right", "bottom"),
+#       x = unit(1, "cm"), y = unit(1, "cm"))
+      #x = unit(legend_x, "npc"), y = unit(legend_y, "npc"))
+  
+   draw(legend_plot, just = c("right", "bottom"),
+      x = unit(legend_x, "npc"), y = unit(legend_y, "npc"))
+   
+   draw(Legend_p, just = c("right", "bottom"),
+      x = unit(legend_x_p, "npc"), y = unit(legend_y_p, "npc"))
+  
+   # draw_title(ifelse(only_young, "Young", "Old"),
+   #            "column", 1)
+   
+}
+
+
+
+```
+
+# Opening peaks in human PBMC: Fold change
+
+## Separated by age
+
+```{r heatmap_opening_human, include=TRUE, echo = TRUE}
+
+if(use_PFM_similarity_for_grouping){
+  opening_FC <- opening_closing_human[["opening"]][[2]]
+  opening_FC$`Transcription factor` <- sapply(opening_FC$`Transcription factor`, 
+                                 introduce_new_line_to_rownames)
+  
+}else{
+  opening_FC <- opening_closing_human[["opening"]][[3]]
+}
+
+opening_FC <- opening_FC[,c(1, grep("FC", colnames(opening_FC)))]
+
+if(plots_in_pdf){
+  if(use_PFM_similarity_for_grouping){
+    pdf("output/F5/human_opening_FC_old_young_by_age_PFM.pdf")  
+  }else{
+    pdf("output/F5/human_opening_FC_old_young_by_age_TF.pdf")  
+  }
+}
+
+plot_HM(opening_FC, isSuperLong = TRUE, opening = TRUE)
+
+if(plots_in_pdf){
+  dev.off()
+}
+
+
+```
+
+## Separated by gender
+
+```{r heatmap_opening_human_by_gender, include=TRUE, echo = TRUE}
+
+if(plots_in_pdf){
+  if(use_PFM_similarity_for_grouping){
+    pdf("output/F5/human_opening_FC_old_young_by_gender_PFM.pdf")  
+  }else{
+    pdf("output/F5/human_opening_FC_old_young_by_gender_TF.pdf")  
+  }
+}
+
+plot_HM(opening_FC, by_age = FALSE, isSuperLong = TRUE, opening = TRUE)
+
+if(plots_in_pdf){
+  dev.off()
+}
+
+```
+
+## Only old
+
+```{r human_FC_only_old, echo=TRUE, include=TRUE}
+
+if(plots_in_pdf){
+  if(use_PFM_similarity_for_grouping){
+    pdf("output/F5/human_opening_FC_old_PFM.pdf",
+        width = 5, height = 5)  
+  }else{
+    pdf("output/F5/human_opening_FC_old_TF.pdf")  
+  }
+}
+
+opening_FC$`Transcription factor` <- gsub("\n ", "", opening_FC$`Transcription factor`)
+
+opening_FC$`Transcription factor` <- sapply(opening_FC$`Transcription factor`, 
+                               introduce_new_line_to_rownames, new_line_after = 25)
+
+plot_HM(opening_FC, isSuperLong = TRUE, only_old = TRUE, opening = TRUE)
+
+if(plots_in_pdf){
+  dev.off()
+}
+
+```
+
+## Only old and significant: Fold change: filtered before averaging
+
+```{r opening_old_sig_FC, include=TRUE, echo=TRUE}
+filter_threshold <- -log(0.05)
+
+opening_old_filtered <- opening_closing_human[[1]][[1]]
+
+opening_old_filtered_fc <- only_relevant_cols(opening_old_filtered, "FC")
+
+opening_old_filtered_pv <- only_relevant_cols(opening_old_filtered, "p value")
+
+filtered_opening_old_both <- keep_only_significant_FC_pv(opening_old_filtered_fc,
+                                                         opening_old_filtered_pv, 
+                                                         " O", 
+                                                         filter_threshold)
+
+if(plots_in_pdf){
+  if(use_PFM_similarity_for_grouping){
+    pdf("output/F5/human_opening_FC_old_PFM_sig.pdf",
+        width = 5, height = 5)  
+  }else{
+    pdf("output/F5/human_opening_FC_old_TF_sig.pdf")  
+  }
+}
+
+FC_sig_old <- filtered_opening_old_both[[1]]
+
+FC_sig_old_as_matrix <- FC_sig_old
+rownames(FC_sig_old_as_matrix) <- FC_sig_old_as_matrix$`Transcription factor`
+FC_sig_old_as_matrix[,1] <- NULL
+FC_sig_old_as_matrix <- as.matrix(FC_sig_old_as_matrix)
+
+open_sig_old_merged <- cluster_heatmaps_on_TF_similarity(FC_sig_old_as_matrix, 
+                                                         return_dend = TRUE)
+
+FC_sig_old_pad_merged <- as.data.frame(open_sig_old_merged[[1]])
+
+rownames(FC_sig_old_pad_merged) <- sapply(rownames(FC_sig_old_pad_merged), 
+                                          introduce_new_line_to_rownames,
+                                          new_line_after = 30)
+
+FC_sig_old_pad <- cbind(`Transcription factor` = rownames(FC_sig_old_pad_merged),
+                        `FC F Y` = 0, `FC M Y` = 0, FC_sig_old_pad_merged[,1:2])
+
+plot_HM(FC_sig_old_pad, isSuperLong = TRUE, only_old = TRUE, opening = TRUE)
+
+if(plots_in_pdf){
+  dev.off()
+}
+
+```
+
+## Only old and significant: log p value: filtered before averaging
+
+```{r opening_old_sig_pv, include=TRUE, echo=TRUE}
+
+if(plots_in_pdf){
+  if(use_PFM_similarity_for_grouping){
+    pdf("output/F5/human_opening_pv_old_PFM_sig.pdf",
+        width = 5, height = 5)  
+  }else{
+    pdf("output/F5/human_opening_pv_old_TF_sig.pdf")  
+  }
+}
+
+pv_sig_old <- filtered_opening_old_both[[2]]
+
+pv_sig_old_pad <- cbind(`Transcription factor` = pv_sig_old[,1], `FC F Y` = 0, `FC M Y` = 0, pv_sig_old[,2:3])
+
+plot_HM(pv_sig_old_pad, isSuperLong = TRUE, only_old = TRUE, opening = TRUE)
+
+if(plots_in_pdf){
+  dev.off()
+}
+
+
+
+
+```
+
+# Opening peaks in human PBMC: log p values
+
+## Separated by age
+
+```{r heatmap_opening_human_p, include=TRUE, echo=TRUE}
+if(use_PFM_similarity_for_grouping){
+  opening_pv <- opening_closing_human[["opening"]][[2]]
+  opening_pv$`Transcription factor` <- sapply(opening_pv$`Transcription factor`, 
+                                 introduce_new_line_to_rownames)
+}else{
+  opening_pv <- opening_closing_human[["opening"]][[3]]
+}
+
+opening_pv <- opening_pv[,c(1, grep("log ", colnames(opening_pv)))]
+
+if(plots_in_pdf){
+  if(use_PFM_similarity_for_grouping){
+    pdf("output/F5/human_opening_pv_old_young_by_age_PFM.pdf")  
+  }else{
+    pdf("output/F5/human_opening_pv_old_young_by_age_TF.pdf")  
+  }
+}
+
+plot_HM(opening_pv, isSuperLong = TRUE, opening = TRUE)
+
+if(plots_in_pdf){
+  dev.off()
+}
+```
+
+```{r opening_only_old_p, include=TRUE, echo=TRUE}
+
+if(plots_in_pdf){
+  if(use_PFM_similarity_for_grouping){
+    pdf("output/F5/human_opening_pv_old_PFM.pdf",
+        width = 5, height = 5)  
+  }else{
+    pdf("output/F5/human_opening_pv_old_TF.pdf")  
+  }
+}
+
+opening_pv$`Transcription factor` <- gsub("\n ", "", opening_pv$`Transcription factor`)
+
+opening_pv$`Transcription factor` <- sapply(opening_pv$`Transcription factor`, 
+                                 introduce_new_line_to_rownames, 
+                                 new_line_after = 25)
+
+plot_HM(opening_pv, isSuperLong = TRUE, opening = TRUE, only_old = TRUE)
+
+if(plots_in_pdf){
+  dev.off()
+}
+```
+
+
+
+# Closing peaks in human PBMC: Fold change
+
+# Young and old
+
+```{r heatmap_closing_human, include=TRUE, echo=TRUE, out.width="100%", fig.height=15}
+if(use_PFM_similarity_for_grouping){
+  closing_FC <- opening_closing_human[["closing"]][[2]]
+  closing_FC$`Transcription factor` <- sapply(closing_FC$`Transcription factor`, 
+                                introduce_new_line_to_rownames)
+}else{
+  closing_FC <- opening_closing_human[["closing"]][[3]]  
+}
+
+closing_FC <- closing_FC[,c(1, grep("FC", colnames(closing_FC)))]
+
+if(plots_in_pdf){
+  if(use_PFM_similarity_for_grouping){
+    pdf("output/F5/human_closing_FC_old_young_PFM.pdf", 
+        width = 10, height = 15)  
+  }else{
+    pdf("output/F5/human_closing_FC_old_young_TF.pdf", 
+        width = 10, height = 15)  
+  }
+}
+
+plot_HM(closing_FC, isSuperLong = TRUE, mini = 7, opening = FALSE)
+
+if(plots_in_pdf){
+  dev.off()  
+}
+
+```
+
+## Only young
+
+```{r closing_human_young_only_FC, include=TRUE, echo=TRUE}
+if(plots_in_pdf){
+  if(use_PFM_similarity_for_grouping){
+    pdf("output/F5/human_closing_FC_young_PFM.pdf", 
+        width = 5, height = 15)  
+  }else{
+    pdf("output/F5/human_closing_FC_young_TF.pdf", 
+        width = 6, height = 15)  
+  }
+}
+
+plot_HM(closing_FC, isSuperLong = TRUE, mini = 7, opening = FALSE, 
+        only_young = TRUE)
+
+if(plots_in_pdf){
+  dev.off()  
+}
+
+```
+
+# Closing peaks in human PBMC: log p values
+
+```{r heatmap_closing_p, include=TRUE, echo=TRUE, out.width="100%", fig.height=15}
+if(use_PFM_similarity_for_grouping){
+  closing_pv <- opening_closing_human[["closing"]][[2]]
+  closing_pv$`Transcription factor` <- sapply(closing_pv$`Transcription factor`, 
+                               introduce_new_line_to_rownames)
+}else{
+  closing_pv <- opening_closing_human[["closing"]][[3]]
+}
+
+closing_pv <- closing_pv[,c(1, grep("log ", colnames(closing_pv)))]
+
+if(plots_in_pdf){
+  if(use_PFM_similarity_for_grouping){
+    pdf("output/F5/human_closing_pv_old_young_PFM.pdf", 
+        width = 7, height = 15)  
+  }else{
+    pdf("output/F5/human_closing_pv_old_young_TF.pdf", 
+        width = 7, height = 15)  
+  }
+}
+
+plot_HM(closing_pv, isSuperLong = TRUE, mini = 7, opening = FALSE)
+
+if(plots_in_pdf){
+  dev.off()  
+}
+
+```
+
+## Only young
+
+```{r only_young_closing_pv, include=TRUE, echo=TRUE}
+if(plots_in_pdf){
+  if(use_PFM_similarity_for_grouping){
+    pdf("output/F5/human_closing_pv_young_PFM.pdf", 
+        width = 5, height = 15)  
+  }else{
+    pdf("output/F5/human_closing_pv_young_TF.pdf", 
+        width = 5, height = 15)  
+  }
+}
+
+plot_HM(closing_pv, isSuperLong = TRUE, mini = 7, opening = FALSE,
+        only_young = TRUE)
+
+if(plots_in_pdf){
+  dev.off()  
+}
+
+```
+
+
+```{r filter_and_plot, include=TRUE, echo=TRUE}
+thr <- -log(0.05)
+oc <- c("opening", "closing")
+fp <- c("df_FC", "df_pv")
+sizes <- list(opening = c(4.5,6), closing = c(4.5, 8))
+sizing_both <- list(opening = c(5.5,6), closing = c(5.5, 8))
+
+significant_per_open_close <- vector("list", length = length(oc))
+names(significant_per_open_close) <- oc
+
+idx_i <- 0
+
+for (i in oc) {
+  idx_i <- idx_i + 1
+  # filter columns from raw dataframes
+  fcs <- only_relevant_cols(opening_closing_human[[i]][[1]], "FC")
+  pvs <- only_relevant_cols(opening_closing_human[[i]][[1]], "p value")
+  
+  filter_for <- ifelse(i == "opening", " O", " Y")
+  
+  # keep only those rows which are significant in at least 1 old/young
+  new_fc_pv <- keep_only_significant_FC_pv(fcs, pvs, filter_by = filter_for,
+                                           threshold = thr)
+  
+  significant_per_open_close[[i]] <- new_fc_pv
+  
+  list_for_xls <- vector("list", length = length(fp))
+  
+  idx_j <- 0
+  
+  for(j in fp){
+    idx_j <- idx_j + 1
+    # merge by TF similarity
+    hm_matrix <- as.matrix(new_fc_pv[[j]][,2:3])
+    rownames(hm_matrix) <- new_fc_pv[[j]][,1]
+    fc_merged <- cluster_heatmaps_on_TF_similarity(hm_matrix,
+                                                   return_dend = TRUE)
+    
+    save(fc_merged, file = paste0("data/human_aging_footprint/human_tree_sig_filtered_merged_", i, "_", j, ".RData"))
+    
+    
+    merged_rows_format <- fc_merged[[1]]
+    
+    rownames(merged_rows_format) <- sapply(rownames(merged_rows_format), 
+                                           introduce_new_line_to_rownames,
+                                           new_line_after = ifelse(i == "opening", 20, 30))
+    # draw heatmaps
+    if(produce_plots_in_pdf){
+      pdf(paste0("output/F5/human/human_TF_filtered_merged_", i, "_", j, ".pdf"),
+          width = sizes[[i]][1], height = sizes[[i]][2])
+    }  
+    merged_rows_format_df <- as.data.frame(merged_rows_format)
+    merged_rows_format_df <- cbind(`Transcription factor` = rownames(merged_rows_format_df),
+                                   merged_rows_format_df)
+    plot_HM(merged_rows_format_df,
+            isSuperLong = TRUE,
+            mini = 10, #ifelse(i == "closing", 10, 10),
+            only_old = ifelse(i == "opening", TRUE, FALSE),
+            only_young = ifelse(i == "closing", TRUE, FALSE),
+            opening = ifelse(i == "opening", TRUE, FALSE),
+            filtered = TRUE)
+    if(produce_plots_in_pdf){
+      dev.off()
+    }
+    list_for_xls[[idx_j]] <- merged_rows_format_df
+  }
+  # draw dendrogram
+  holder2 <- produce_dendrogram_plot(fc_merged[[3]],
+                                     num_clusters = length(unique(fc_merged[[2]])),
+                                     subtitle_ = paste("Human PBMC,", i),
+                                     path = paste0("output/F5/human/human_tree_filtered_merged_", i, ".pdf"),
+                                     very_tall = ifelse(i == "opening", 1, 2.4),
+                                     sub_offset = ifelse(i == "opening", 0.035, 0.015))
+  
+  # produce spreadsheet
+  dfs_without_newline <- lapply(list_for_xls, function(x){
+    x[,1] <- gsub("\n", "", x[,1])
+    return(x)
+  })
+  
+  names(dfs_without_newline) <- c("Fold change", "log p value (FDR)")
+  
+  file_name_list <- paste0("human_", i, "_transcription_factors_FC_p_merged_filtered.xlsx")
+  write_xlsx(dfs_without_newline, path = paste0("output/F5/human/", file_name_list))
+  
+  
+  # draw heatmaps side by side
+  if(produce_plots_in_pdf){
+    pdf(paste0("output/F5/human/human_TF_filtered_merged_", i, "_both.pdf"),
+        width = sizing_both[[i]][1], height = sizing_both[[i]][2])
+  } 
+  
+  one <- list_for_xls[[1]]
+  the_other <- list_for_xls[[2]]
+  
+  plot_hm_side_by_side(one, the_other, 
+          isSuperLong = TRUE,
+          mini = 10, #ifelse(i == "closing", 10, 10),
+          only_old = ifelse(i == "opening", TRUE, FALSE),
+          only_young = ifelse(i == "closing", TRUE, FALSE),
+          opening = ifelse(i == "opening", TRUE, FALSE),
+          filtered = TRUE)
+  if(produce_plots_in_pdf){
+    dev.off()
+  }
+  
+  
+  
+  
+}
+
+
+```
+
+
+```{r overlap_m_f_old, include=TRUE, echo=TRUE}
+source("code/library_function_wf_flow.R")
+library(Vennerable)
+library(circlize)
+library(VennDiagram)
+
+opening_subjects <- significant_per_open_close[["opening"]]
+
+find_sig_for_both_genders <- function(subjects){
+  sig_open_male <- find_significant_per_gender(subjects[["df_FC"]],
+                                        subjects[["df_pv"]], 
+                                        gender = " M ")
+  sig_open_male_with_id <- split_jaspar_name_return_df_of_names(sig_open_male)
+  
+  sig_open_female <- find_significant_per_gender(subjects[["df_FC"]],
+                                          subjects[["df_pv"]], 
+                                          gender = " F ")
+  if(length(sig_open_female) > 0){
+    sig_open_female_with_id <- split_jaspar_name_return_df_of_names(sig_open_female)
+  }else{
+    sig_open_female_with_id <- sig_open_female
+  }
+  
+  return(list(male = sig_open_male_with_id,
+              female = sig_open_female_with_id))
+}
+
+
+
+
+
+sets_of_opening <- list(`Old male` = find_sig_for_both_genders(opening_subjects)[["male"]], 
+                        `Old female` = find_sig_for_both_genders(opening_subjects)[["female"]])
+
+# venn.alpha <- Venn(Sets = sets_of_opening)
+# plot(venn.alpha)
+
+#install.packages("VennDiagram")
+
+if(produce_plots_in_pdf){
+  pdf("output/F5/human/male_female_TF_overlaps_opening.pdf")
+}
+
+male_color <- color_values[which(names(color_values) == "M")]
+female_color <- color_values[which(names(color_values) == "F")]
+
+grid.newpage()
+draw.pairwise.venn(area1 = nrow(sets_of_opening[["Old male"]]), 
+                   area2 = 0, 
+                   cross.area = 0, 
+                   category = names(sets_of_opening), 
+                   lty = 1, 
+                   fill = c("#c70039", "#EE7600"), 
+                   col = c(male_color, female_color),
+                   label.col = rep("black", 3), #c("#E4252B", "#377EB8", "#377EB8")
+                   cat.col =c(male_color, female_color),# c("#E4252B", "#377EB8"),
+                   fontfamily = c("", "", ""),
+                   cat.fontfamily = rep("", 2),
+                   alpha = rep(0.8, 2), 
+                   cat.pos = c(0, 180), 
+                   euler.d = TRUE, 
+                   sep.dist = 0.1, 
+                   rotation.degree = 45,
+                   cat.dist = 0.01)
+if(produce_plots_in_pdf){
+  dev.off()
+}
+
+```
+
+
+```{r overlap_m_f_closing, include=TRUE, echo=TRUE}
+closing_subjects <- significant_per_open_close[["closing"]]
+
+significant_closing <- find_sig_for_both_genders(closing_subjects)
+
+sig_closing_full_prety_names <- lapply(significant_closing, function(x){
+  return(paste(x[,2], x[,3]))
+})
+
+sig_closing_just_names <- lapply(significant_closing, function(x){
+  return(x[,3])
+})
+
+names_with_nl <- introduce_new_line_to_rownames(paste(sort(intersect(sig_closing_full_prety_names[[1]], 
+                                                                     sig_closing_full_prety_names[[2]])),
+                                                      collapse = ","), new_line_after = 80)
+if(produce_plots_in_pdf){
+  pdf("output/F5/human/male_female_TF_overlaps_closing.pdf")  
+}
+
+venn_h_c <- Venn(Sets = sig_closing_full_prety_names)
+venn_h_alpha <- compute.Venn(venn_h_c, type = "circles")
+venn_gp.a_h_c <- VennThemes(venn_h_alpha)
+venn_gp_h_c <- VennThemes(venn_h_alpha,increasingLineWidth=FALSE)
+
+venn_gp_h_c[["SetText"]][["Set1"]]$col <- color_values[which(names(color_values) == "M")]
+venn_gp_h_c[["SetText"]][["Set2"]]$col <- color_values[which(names(color_values) == "F")]
+
+venn_gp_h_c[["Set"]][["Set1"]]$col <- color_values[which(names(color_values) == "M")]
+venn_gp_h_c[["Set"]][["Set2"]]$col <- color_values[which(names(color_values) == "F")]
+
+labs_h_c <- VennGetSetLabels(venn_h_alpha)
+labs_h_c$x <- c(-2, 2)
+venn_h_alpha <- VennSetSetLabels(venn_h_alpha, labs_h_c)
+
+venn_gp_h_c[["Face"]][["01"]]$fill <- "#59A5D8" 
+venn_gp_h_c[["Face"]][["10"]]$fill <- "#84D2F6"
+venn_gp_h_c[["Face"]][["11"]]$fill <- "#386FA4"
+
+# grid.newpage()
+# plot(venn_h_alpha,
+#      gp = venn_gp_h_c,
+#      show=list(Universe=FALSE))
+
+gridExtra::grid.arrange(grid::grid.grabExpr(plot(venn_h_alpha,
+                                                 gp = venn_gp_h_c,
+                                                 show=list(Universe=FALSE))),
+                          top=textGrob(paste0("Closing peaks in young, log p value threshold: ", round(thr, digits = 3)),
+                                       gp=gpar(fontsize=15)),
+                          bottom = textGrob(paste0("Intersect: ", names_with_nl), gp=gpar(fontsize=8)))
+
+
+just_names_with_nl <- introduce_new_line_to_rownames(paste(sort(intersect(sig_closing_just_names[[1]], 
+                                                                     sig_closing_just_names[[2]])),
+                                                      collapse = ","), new_line_after = 80)
+
+
+#plot(Venn(Sets = sig_closing_just_names), show=list(Universe=FALSE))
+
+venn_h_c_short <- Venn(Sets = sig_closing_just_names)
+venn_h_alpha_short <- compute.Venn(venn_h_c_short, type = "circles")
+labs_h_c_short <- VennGetSetLabels(venn_h_alpha_short)
+labs_h_c_short$x <- c(-1.5, 1.5)
+#labs_h_c_short$y <- c(5, 5)
+venn_h_alpha_short <- VennSetSetLabels(venn_h_alpha_short, labs_h_c_short)
+# grid.newpage()
+# plot(venn_h_alpha_short,
+#      gp = venn_gp_h_c,
+#      show=list(Universe=FALSE))
+
+
+gridExtra::grid.arrange(grid::grid.grabExpr(plot(venn_h_alpha_short,
+     gp = venn_gp_h_c,
+     show=list(Universe=FALSE))), 
+                          top=textGrob(paste0("Closing peaks in young, log p value threshold: ", round(thr, digits = 3)),
+                                       gp=gpar(fontsize=15)),
+                          bottom = textGrob(paste0("Intersect: ", just_names_with_nl), gp=gpar(fontsize=10)))
+if(produce_plots_in_pdf){
+  dev.off()
+}
+
+#plot(Venn(Sets = sig_closing_just_names), show=list(Universe=FALSE))
+
+```
+
+
+```{r}
+library(readxl)
+read_excel_allsheets <- function(filename, tibble = FALSE) {
+  # I prefer straight data.frames
+  # but if you like tidyverse tibbles (the default with read_excel)
+  # then just pass tibble = TRUE
+  sheets <- readxl::excel_sheets(filename)
+  x <- lapply(sheets, function(X) readxl::read_excel(filename, sheet = X))
+  if(!tibble) x <- lapply(x, as.data.frame)
+  names(x) <- sheets
+  x
+}
+
+motif.table <- read_excel_allsheets("Supplementary/Summary Tables/Supplementary_Table_Motif_Mice.xlsx")
+
+TFs <- c("NFE2L2","Fos", "Fosl2", "JunB", "JunD", "Jdp2")
+
+logp.vals <- lapply(motif.table[c(1:8)], function(x){
+
+  x.split <- strsplit(x$Motif.Name, "(", fixed = T) %>%
+    sapply(function(x){x[1]})
+
+  -1* x[match(TFs, x.split),"Log.P.value"]
+
+
+}) %>% bind_rows(.id = "TCT") %>% as.data.frame
+
+rownames(logp.vals) <- toupper(TFs)
+
+stars <- ifelse(logp.vals > -log(0.001), "***",
+          ifelse(logp.vals > -log(0.01), "**",
+                 ifelse(logp.vals > -log(0.05), "*", "")))
+
+a<- colnames(logp.vals) %>% strsplit("_", fixed = T) %>% as.data.frame %>% t
+
+a <- data.frame(a[,c(2,4)])
+rownames(a) <- colnames(logp.vals)
+colnames(a) <- c( "TCT", "Strain")
+
+ann_colors = list(
+  GENDER = c(color_values["F"], color_values["M"]),
+  Strain = c(color_values["B6"], color_values["NZO"]),
+  AGE = c(color_values["3"], color_values["12"], color_values["18"]),
+  TISSUE = c(color_values["PBL"], color_values["spleen"]),
+  TCT = c(color_values["PBL"], SPLEEN = color_values["spleen"][[1]], MEMORY = color_values["CD8.memory"][[1]],
+          NAIVE = color_values["CD8.naive"][[1]])
+)
+```
+
+
+```{r}
+pdf("output/F5/Homer Motif Analyses/DE_peaks_vs_Background_peaks/Homer_Opening_TFs_P_values_pheatmap.pdf",
+    width = 5.75, height = 2.25, useDingbats = F)
+pheatmap(logp.vals[-6,], color = rev(brewer.pal(n= 9, name = "BrBG"))  , cluster_cols = F, cluster_rows = F,
+         display_numbers = stars[-6,], fontsize_number = 14, number_color =  "white", border_color = "white",
+         annotation_col = a, annotation_colors = ann_colors, show_colnames = F)
+dev.off()
+```
+

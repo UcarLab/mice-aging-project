@@ -1,0 +1,336 @@
+---
+title: "Human CD8 Analyses"
+author: "EO Karakaslar"
+date: "12/2/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+require(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+opts_knit$set(root.dir = "/Users/karako/Dropbox (JAX)/MouseAging_clean/") #set root dir!
+```
+
+```{r libraries}
+library(dplyr)
+library(cinaR)
+library(readxl)
+```
+
+```{r}
+meta.cd8 <- read_excel("data/ATACseq/human/Human_CD8_meta.xls")
+data.mem <- read.csv("data/ATACseq/human/MEMORYCD8T_8_samples_raw.txt", sep = "\t")
+data.nai <- read.csv("data/ATACseq/human/NAIVECD8T_8_samples_raw.txt", sep = "\t")
+
+data.mem <- data.mem[,c(1:11)]
+data.nai <- data.nai[,c(1:11)]
+
+colnames(data.mem) <- strsplit(colnames(data.mem), "_", fixed = TRUE )%>% sapply(function(x){x[1]})
+colnames(data.nai) <- strsplit(colnames(data.nai), "_", fixed = TRUE )%>% sapply(function(x){x[1]})
+
+# Remove D0 from sample name
+meta.cd8$sampid[meta.cd8$sampid == "VHY402D0"] <- "VHY402"
+
+meta.mem <- meta.cd8[match(colnames(data.mem[,c(4:11)]), meta.cd8$sampid),]
+meta.nai <- meta.cd8[match(colnames(data.nai[,c(4:11)]), meta.cd8$sampid),]
+
+load("data/genesets/Wikipathways/Wiki_inflammation.rda")
+
+# make module GMT format
+wp.inflammation.gmt <- split(wp.inflammation$GeneName, wp.inflammation$Module.Name)
+```
+
+```{r cinaR memory}
+result.mem <- cinaR(data.mem, contrasts = meta.mem$group, reference.genome = "hg19", 
+                    batch.correction = F,  DA.choice = 2, DA.fdr.threshold = 0.1, 
+                    geneset = wp.inflammation.gmt)
+
+
+pdf("output/F4/Human_CD8/Memory_CD8_Results_without_batch.pdf", onefile = T)
+dot_plot(result.mem, filter.pathways = T)
+dev.off()
+
+result.mem.batch <- cinaR(data.mem, contrasts = meta.mem$group, reference.genome = "hg19", 
+                          batch.correction = T,  DA.choice = 2, DA.fdr.threshold = 0.1, 
+                          geneset = wp.inflammation.gmt)
+
+pdf("output/F4/Human_CD8/Memory_CD8_Results_with_batch.pdf", onefile = T)
+pca_plot(result.mem.batch, meta.mem$group)
+dot_plot(result.mem.batch, filter.pathways = T)
+dev.off()
+```
+
+```{r cinaR naive}
+result.nai <- cinaR(data.nai, contrasts = meta.nai$group, reference.genome = "hg19", 
+                    batch.correction = F,  DA.choice = 2, DA.fdr.threshold = 0.1, 
+                    geneset = wp.inflammation.gmt)
+
+
+pdf("output/F4/Human_CD8/Naive_CD8_Results_without_batch.pdf", onefile = T)
+dot_plot(result.nai, filter.pathways = T)
+dev.off()
+
+
+result.nai.batch <- cinaR(data.nai, contrasts = meta.nai$group, reference.genome = "hg19", 
+                          batch.correction = T,  DA.choice = 2, DA.fdr.threshold = 0.1, 
+                          geneset = wp.inflammation.gmt)
+
+pdf("output/F4/Human_CD8/Naive_CD8_Results_with_batch.pdf", onefile = T)
+pca_plot(result.nai.batch, meta.nai$group)
+dot_plot(result.nai.batch, filter.pathways = T)
+dev.off()
+```
+
+```{r Pheatmap CD8 }
+enrichment.df <- rbind(
+  cbind(CT = "CD8 Naive", result.nai$Enrichment.Results$HO_HY),
+  cbind(CT = "CD8 Memory", result.mem$Enrichment.Results$HO_HY)
+)
+
+p <- ggplot(subset(enrichment.df, adj.p < 0.1),
+            aes(
+              x = CT,
+              y = module.name,
+              size = ifelse(adj.p < 0.1,-log(adj.p),
+                            NA),
+              color = status
+            )) + geom_point() + scale_color_manual(values = color_values) + 
+  xlab("") + ylab("") + theme_minimal(base_size = 18) + labs(size = "-log(adj.p)", color = "Regulation")
+
+ggsave(filename = "output/F4/Human_CD8/Enrichment_WP_Inflammation_Human.pdf", plot = p, width = 11.6, height = 6)
+```
+
+
+```{r}
+
+DA.peaks.mem <- result.mem.batch$DA.results$DA.peaks$HO_HY
+DA.peaks.nai <- result.nai.batch$DA.results$DA.peaks$HO_HY
+
+write.csv(DA.peaks.mem, "output/F4/Human_CD8/DA_peaks_mem_batch_corrected.csv")
+write.csv(DA.peaks.nai, "output/F4/Human_CD8/DA_peaks_nai_batch_corrected.csv")
+
+```
+
+```{r scRNAseq pbmc top module}
+
+load("analysis/cache/enrichment_analysis.Rdata")
+
+geneset <- merge(selected_genesets$scrnaseq_pbmc_top, selected_genesets_labels$scrnaseq_pbmc_top, by = "Module.ID")
+
+geneset <- split(geneset$GeneName, geneset$Module.Name)
+
+result.mem.batch <- cinaR(data.mem, contrasts = meta.mem$group, reference.genome = "hg19", 
+                          batch.correction = T,  DA.choice = 2, DA.fdr.threshold = 0.1, 
+                          geneset = geneset)
+
+result.nai.batch <- cinaR(data.nai, contrasts = meta.nai$group, reference.genome = "hg19", 
+                          batch.correction = T,  DA.choice = 2, DA.fdr.threshold = 0.1, 
+                          geneset = geneset)
+
+```
+
+```{r}
+# Works only if FDR = 1 & LFC = 0
+create_peak_matrix <- function(result){
+    
+    da <- result$DA.peaks$HO_HY
+    cp <- result$cp
+    
+    # WOAH %<>%
+    da <- da %>% arrange(abs(distanceToTSS)) 
+    da <- da[!duplicated(da$gene_name) & !is.na(da$gene_name),]
+
+    cp <- cp[match(da$Row.names, rownames(cp)),]
+    
+    rownames(cp) <- da$gene_name
+    
+    return(cp)
+}
+```
+
+
+```{r}
+ap1.genes <- c("Jun", "Junb", "Jund", "Fos", "Fosb", "Fosl2", "Fra1" ,"Fra2", "Atf" ,"Atf2", "Atf3", "Atf4", "Atf5", "Atf6", "Atf6b", "Atf7", "Batf", "Batf2", "Batf3" , "Jdp2", "Maf", "Mafa", "Mafb", "Maff", "Mafg", "Mafk")
+
+ap1.genes.human <- toupper(ap1.genes)
+
+result.nai <- cinaR(data.nai, contrasts = meta.nai$group, reference.genome = "hg19", 
+                    batch.correction = F,  DA.choice = 2, DA.fdr.threshold = 1, 
+                    run.enrichment = F)
+
+# Prepare motif analyses files
+DA.res <- result.nai$DA.peaks$HO_HY
+colnames(DA.res)[c(1:4, 6)] <- c("UniqueID", "Chr", "Start", "End", "Strand")
+DA.res$Strand <- "+"
+
+nai.background <- DA.res[abs(DA.res$logFC) < 0.2, c("UniqueID", "Chr", "Start", "End", "Strand")]
+nai.opening    <- DA.res[DA.res$logFC > 0 & DA.res$FDR < 0.1, c("UniqueID", "Chr", "Start", "End", "Strand")]
+nai.closing    <- DA.res[DA.res$logFC < 0 & DA.res$FDR < 0.1, c("UniqueID", "Chr", "Start", "End", "Strand")]
+
+write.table(x = nai.opening, 
+          file = "output/F5/Homer Motif Analyses/Human CD8/Opening_Human_CD8_Naive_HomerReady.txt", 
+          quote = FALSE, sep = "\t", row.names = F)
+write.table(x = nai.closing, 
+          file = "output/F5/Homer Motif Analyses/Human CD8/Closing_Human_CD8_Naive_HomerReady.txt", 
+          quote = FALSE, sep = "\t", row.names = F)
+write.table(x = nai.background, 
+          file = "output/F5/Homer Motif Analyses/Human CD8/Opening_Human_CD8_Naive_HomerReady_Background.txt", 
+          quote = FALSE, sep = "\t", row.names = F)
+write.table(x = nai.background, 
+          file = "output/F5/Homer Motif Analyses/Human CD8/Closing_Human_CD8_Naive_HomerReady_Background.txt", 
+          quote = FALSE, sep = "\t", row.names = F)
+
+cp.nai <- create_peak_matrix(result.nai)
+
+
+
+cp.nai.ap1 <- cp.nai[rownames(cp.nai) %in% ap1.genes.human,order(meta.nai$age)]
+
+meta.ordered <- meta.nai[order(meta.nai$age),]
+annotation.col <- meta.ordered$age %>% as.numeric %>% data.frame
+rownames(annotation.col) <- meta.ordered$sampid
+colnames(annotation.col) <- c("Age")
+
+breaksList = seq(-2, 2, by = .001)
+
+pdf("output/F4/Heatmap_AP1_Genes_CD8_Naive_Human_ATACseq.pdf", width = 3.5, height = 4)
+pheatmap(cp.nai.ap1, annotation_col = annotation.col,
+         scale = "row", breaks = breaksList, cluster_cols = F, show_colnames = F,
+         colorRampPalette(rev(brewer.pal(n = 9, name = "RdBu")))(length(breaksList)))
+dev.off()
+```
+
+
+```{r}
+result.mem <- cinaR(data.mem, contrasts = meta.mem$group, reference.genome = "hg19", 
+                    batch.correction = F,  DA.choice = 2, DA.fdr.threshold = 1, 
+                    run.enrichment = F)
+
+
+
+# Prepare motif analyses files
+DA.res <- result.mem$DA.peaks$HO_HY
+colnames(DA.res)[c(1:4, 6)] <- c("UniqueID", "Chr", "Start", "End", "Strand")
+DA.res$Strand <- "+"
+
+mem.background <- DA.res[abs(DA.res$logFC) < 0.2, c("UniqueID", "Chr", "Start", "End", "Strand")]
+mem.opening    <- DA.res[DA.res$logFC > 0 & DA.res$FDR < 0.1, c("UniqueID", "Chr", "Start", "End", "Strand")]
+mem.closing    <- DA.res[DA.res$logFC < 0 & DA.res$FDR < 0.1, c("UniqueID", "Chr", "Start", "End", "Strand")]
+
+write.table(x = mem.opening, 
+          file = "output/F5/Homer Motif Analyses/Human CD8/Opening_Human_CD8_Memory_HomerReady.txt", 
+          quote = FALSE, sep = "\t", row.names = F)
+write.table(x = mem.closing, 
+          file = "output/F5/Homer Motif Analyses/Human CD8/Closing_Human_CD8_Memory_HomerReady.txt", 
+          quote = FALSE, sep = "\t", row.names = F)
+write.table(x = mem.background, 
+          file = "output/F5/Homer Motif Analyses/Human CD8/Opening_Human_CD8_Memory_HomerReady_Background.txt", 
+          quote = FALSE, sep = "\t", row.names = F)
+write.table(x = mem.background, 
+          file = "output/F5/Homer Motif Analyses/Human CD8/Closing_Human_CD8_Memory_HomerReady_Background.txt", 
+          quote = FALSE, sep = "\t", row.names = F)
+
+
+cp.mem <- create_peak_matrix(result.mem)
+
+
+cp.mem.ap1 <- cp.mem[rownames(cp.mem) %in% ap1.genes.human,order(meta.mem$age)]
+
+meta.ordered.mem <- meta.mem[order(meta.mem$age),]
+annotation.col <- meta.ordered.mem$age %>% as.numeric %>% as.data.frame
+rownames(annotation.col) <- meta.ordered.mem$sampid
+colnames(annotation.col) <- c("Age")
+
+
+
+breaksList = seq(-2, 2, by = .001)
+pdf("output/F4/Heatmap_AP1_Genes_CD8_Memory_Human_ATACseq.pdf", width = 3.5, height = 4)
+pheatmap(cp.mem.ap1, annotation_col = annotation.col,
+         scale = "row", breaks = breaksList, show_colnames = F, cluster_cols = F,
+         colorRampPalette(rev(brewer.pal(n = 9, name = "RdBu")))(length(breaksList)))
+dev.off()
+```
+
+```{r FOSL2}
+source("code/color_values.R")
+
+df.plot.nai <- cbind(expr = cp.nai["FOSL2", ], meta.nai, cell.type = "CD8+ Naive")
+df.plot.mem <- cbind(expr = cp.mem["FOSL2", ], meta.mem, cell.type = "CD8+ Memory")
+
+df.plot <- rbind(df.plot.nai, df.plot.mem)
+
+df.plot$group <- factor(df.plot$group, levels = c("HY", "HO"))
+
+ggplot(df.plot , aes(group, expr)) + 
+  geom_boxplot(aes(color = sex, shape = cell.type)) + 
+  geom_point(aes(color = sex,  shape = cell.type), size = 3.5) +
+  facet_wrap(~cell.type + sex , nrow = 1) + 
+  ggtitle("") + ylim(c(3,8)) +
+  xlab("") + ylab("") +
+  theme_pubr(base_size = 12) +
+  theme(strip.text = element_blank()) +
+  theme(legend.position="right") +
+    stat_compare_means(comparisons = list(c("HO","HY")),
+                     size = 4, method = "wilcox.test", paired = FALSE,
+                     tip.length = 0,
+                     vjust = 0, position = 8, label.y = 7.9) +
+  scale_color_manual(values = color_values) +
+  labs(color = "Sex", shape = "Cell Type")
+
+ggsave("output/F4/DE_genes/Human_CD8_ATACseq_FOSL2.pdf",useDingbats = F, width = 6, height = 4)
+```
+
+
+
+```{r Common TFs p-values}
+read_excel_allsheets <- function(filename, tibble = FALSE) {
+    # I prefer straight data.frames
+    # but if you like tidyverse tibbles (the default with read_excel)
+    # then just pass tibble = TRUE
+    sheets <- readxl::excel_sheets(filename)
+    x <- lapply(sheets, function(X) readxl::read_excel(filename, sheet = X))
+    if(!tibble) x <- lapply(x, as.data.frame)
+    names(x) <- sheets
+    x
+}
+
+human.tfs <- read_excel_allsheets("Supplementary/Summary Tables/Supplementary_Table_Motif_Human.xlsx")
+
+# We are interested in opening peak related motif enrichments
+
+pbmc.opening <- human.tfs$Opening_Human_PBMC
+cd8.naive.opening <- human.tfs$Opening_Human_CD8_Naive
+cd8.memory.opening <- human.tfs$Opening_Human_CD8_Memory
+
+motif.table <- list(PBMC = pbmc.opening, `CD8+ Naive` = cd8.naive.opening, `CD8+ Memory` = cd8.memory.opening) 
+
+TFs <- c("NFE2L2","Fos", "Fosl2", "JunB", "JunD", "Jdp2")
+
+logp.vals <- lapply(motif.table, function(x){
+
+  x.split <- strsplit(x$Motif.Name, "(", fixed = T) %>%
+    sapply(function(x){x[1]})
+
+  -1* x[match(TFs, x.split),"Log.P.value"]
+
+
+}) %>% bind_rows(.id = "TCT") %>% as.data.frame
+
+rownames(logp.vals) <- toupper(TFs)
+
+stars <- ifelse(logp.vals > -log(0.001), "***",
+          ifelse(logp.vals > -log(0.01), "**",
+                 ifelse(logp.vals > -log(0.05), "*", "")))
+
+breaksList <- seq(-3, 3, by = .01)
+
+pdf("output/F5/Heatmap_Human_Shared_TFs_Motif_Enrichment.pdf", useDingbats = F, width = 5, height = 3)
+pheatmap(logp.vals[-6,], 
+         color = grDevices::colorRampPalette((RColorBrewer::brewer.pal(n=7,"Blues")))(length(breaksList)), 
+         cluster_cols = F, cluster_rows = F,
+         display_numbers = stars[-6,], fontsize_number = 14, number_color =  "white", border_color = "white",
+         show_colnames = T, angle_col = 0)
+dev.off()
+
+```
+

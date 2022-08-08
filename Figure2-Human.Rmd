@@ -1,0 +1,458 @@
+---
+title: "Cell Compositions Human"
+author: "E Onur Karakaslar"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: workflowr::wflow_html
+editor_options:
+  chunk_output_type: console
+---
+# Prepare the environment
+
+```{r setup, include=FALSE}
+require(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+opts_knit$set(root.dir = "/Users/karako/Dropbox (JAX)/MouseAging_clean/") #set root dir!
+```
+
+```{r libraries, include=TRUE, echo=TRUE}
+library(dplyr)
+library(ggpubr)
+library(readxl)
+library(glmnet)
+library(ggpmisc)
+library(writexl)
+library(ggplot2)
+library(circlize)
+library(pheatmap)
+library(reshape2)
+library(DescTools)
+library(patchwork)
+library(paletteer)
+library(colorspace)
+library(ComplexHeatmap)
+```
+
+```{r setup, include=FALSE}
+require(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+opts_knit$set(root.dir = "/Users/karako/Dropbox (JAX)/MouseAging_clean/") #set root dir!
+```
+
+```{r Load data}
+source("code/library_function_wf_flow.r")
+human <- read_excel('data/flow/Flow_human.xlsx')
+
+main_types <- c("CD4T", "CD8T", "CD19", "CD14", "OTHER")
+CD4_list <- c( "CD4TNAIVE", "CD4TCENTRALMEMORY", "CD4TEFFECTORMEMORY", "CD4TEFFECTOR")
+CD8_list <- c( "CD8TNAIVE", "CD8TCENTRALMEMORY", "CD8TEFFECTORMEMORY", "CD8TEFFECTOR")
+
+
+all_list <- c(main_types, CD4_list, CD8_list)
+all_list_pretty <- c("CD4+", "CD8+", "CD19+", "CD14+", "Other",
+                      "CD4+ Naive", "CD4+ CM", "CD4+ EM", "CD4+ EMRA", 
+                      "CD8+ Naive", "CD8+ CM", "CD8+ EM", "CD8+ EMRA")
+
+names(all_list_pretty) <- all_list
+
+
+
+# str(human[,c(main_types, CD4_list, CD8_list)])
+# Some cell types are wrongly characters, so convert them to numeric
+human[all_list] <- sapply(human[all_list], as.numeric)
+
+```
+
+
+```{r Cell Composition Change Plots}
+plot_list <- function(list, y_lim, ylab_){
+  
+  plots <- lapply(list, function(y){
+    
+      formula <- y ~ poly(x, 1, raw = TRUE)
+      ggplot(human, aes_string(x = "age", y = y, color = "sex")) + 
+      geom_point(size = 3, alpha = 0.7) + 
+      theme_bw(base_size = 12, base_family = "sans") +
+      geom_smooth(method = "lm", formula = formula, se = F, size = 0.8, color =  "darkgray") + 
+      scale_color_manual(values = color_values) + 
+      ylim(c(0,100)) + xlab("") + ylab(ylab_) + ggtitle(all_list_pretty[y]) + labs(color = "Sex") +
+      scale_x_continuous(breaks = c(30,60,90), limits = c(20,100)) +
+      theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+            plot.title = element_text(hjust = 0.5, size = 12),
+            strip.background = element_blank(),
+            strip.text.x = element_blank(),
+            legend.position = "none", 
+            axis.title.y = element_text(size = 8, vjust = -1), 
+            plot.margin = unit(c(0.3,1, -0.8, -0), "lines")) + 
+      facet_wrap(~sex) + 
+      stat_poly_eq(label.x = 0.95, 
+                   label.y = 0.95, size = 4.5, color = "black",
+                   aes(label = paste("atop(", stat(p.value.label), 
+                                     ",", stat(rr.label), ")", sep = "")), 
+                   formula = formula, coef.digits = 3,
+                   parse = TRUE)
+      
+     
+  })
+  # patchwork::wrap_plots(main_type_plots, ncol = 2, nrow = 2, guides = "collect",)
+  p <- ggpubr::ggarrange(plotlist = plots, 
+                         common.legend = TRUE, 
+                         legend = "right", 
+                         hjust = -2)
+  
+  # p <- annotate_figure(p, 
+  #                     left = text_grob("Percentage", rot = 90, hjust = 0.2, vjust = 0.2),
+  #                     bottom = text_grob("Age", vjust = -0.2, hjust = 1.1))
+  
+  return(list(plot.list = plots, arrange.fig = p))
+}
+
+
+
+
+p_main <- plot_list(main_types, y_lim = c(0,100), ylab_ = "")
+p_cd4  <- plot_list(CD4_list  , y_lim = c(0,35), ylab_ = "")
+p_cd8  <- plot_list(CD8_list  , y_lim = c(0,25), ylab_ = "")
+
+all_plots_human.list <- c(p_main$plot.list, p_cd4$plot.list, p_cd8$plot.list)
+all_plots_human <- ggpubr::ggarrange(plotlist = all_plots_human.list, 
+                                     common.legend = TRUE, 
+                                     legend = "bottom", 
+                                     hjust = -2)
+
+ggsave("output/F2/human_main_cell_types_aging.pdf",
+       plot = p_main,
+       dpi = 300,
+       units = "in",
+       width = 8.5,
+       height = 6)
+ggsave("output/F2/human_cd4_cell_types_aging.pdf",
+       plot = p_cd4,
+       dpi = 300,
+       units = "in",
+       width = 8.5,
+       height = 6)
+ggsave("output/F2/human_cd8_cell_types_aging.pdf",
+       plot = p_cd8,
+       dpi = 300,
+       units = "in",
+       width = 8.5,
+       height = 6)
+
+ggsave("output/F2/human_flow_all_plots.pdf",
+       plot = all_plots_human,
+       dpi = 300,
+       units = "in",
+       width = 16,
+       height = 9,
+       useDingbats = F)
+```
+
+```{r CD8+ Plots}
+CD8_emra_human_plot <- 
+  p_cd8$plot.list[[4]] + 
+  theme_pubr(base_size = 12) +
+  ylim (c(0,20)) +
+  theme(plot.title = element_text(hjust = 0.5, size = 16),
+        strip.background = element_blank(),
+        strip.text.x = element_blank(),
+        legend.position = "none") 
+
+ggsave(plot = CD8_emra_human_plot, filename ="output/F2/cd8_emra_human.pdf", 
+       useDingbats = F, width = 6, height = 3.5)
+
+
+CD8_naive_human_plot <- 
+  p_cd8$plot.list[[1]] + 
+  theme_pubr(base_size = 12) +
+  ylim (c(0,20)) +
+  theme(plot.title = element_text(hjust = 0.5, size = 16),
+        strip.background = element_blank(),
+        strip.text.x = element_blank(),
+        legend.position = "none")
+
+ggsave(plot = CD8_naive_human_plot, filename ="output/F2/cd8_naive_human.pdf", 
+       useDingbats = F, width = 6, height = 3.5)
+```
+
+
+```{r Slope HeatMaps}
+all_types <- c(main_types, CD4_list, CD8_list)
+# split gender
+human_f <- human[human$sex == "F",]
+human_m <- human[human$sex == "M",]
+
+df_list <- lapply(all_types, function(type){
+  summary_f <- summary(lm((human_f[,type][[1]] %>% as.numeric)~human_f$age, na.action = na.omit))$coef[,c(1,4)]
+  summary_m <- summary(lm((human_m[,type][[1]] %>% as.numeric)~human_m$age, na.action = na.omit))$coef[,c(1,4)]
+  
+# Coef and P-val
+data.frame(Type = type, Sign = sign(summary_m[2,1]), 
+           p = summary_m[2,2], Gender = "Male", stringsAsFactors = F) %>% 
+  rbind(c(type,sign(summary_f[2,1]), summary_f[2,2], "Female"))
+})
+
+df <- do.call("rbind", df_list)
+df$p <- df$p %>% as.numeric
+df$Sign <- df$Sign %>% as.numeric
+
+df$adj.p <- p.adjust(df$p, "fdr")
+df$log.adj.p <- log(df$adj.p) * (-1)
+df$Significant <- df$adj.p < 0.05
+
+MAX=max(abs(df$Sign*df$log.adj.p))+1
+breaksList = seq(-MAX, MAX, by = 1)
+colvec_flow=colorRamp2(breaksList, generate_cool_warm(length(breaksList)))
+
+legend_flow <- Legend(col_fun = colvec_flow, 
+                title = "-log (adj p) * direction",
+                title_position = "topcenter",
+                at = pretty(trunc(breaksList), n = 3),
+                legend_height = unit(4, "cm"))
+
+df$Result <- df$Sign * df$log.adj.p
+result <- matrix(df$Result, nrow = 2) %>% t
+significance <- matrix(df$Significant, nrow = 2) %>% t
+
+rownames(result) <- df$Type %>% unique()
+colnames(result) <- c("Male", "Female")
+
+# [1] "CD4T"               "CD8T"               "CD19"               "MONOCYTES"          "CD4TNAIVE"         
+# [6] "CD4TCENTRALMEMORY"  "CD4TEFFECTORMEMORY" "CD4TEFFECTOR"       "CD8TNAIVE"          "CD8TCENTRALMEMORY" 
+# [11]"CD8TEFFECTORMEMORY" "CD8TEFFECTOR"   
+rownames(result) <- c("CD4+", "CD8+", "CD19+", "CD14+", "Other",
+                      "CD4+ Naive", "CD4+ CM", "CD4+ EM", "CD4+ EMRA", 
+                      "CD8+ Naive", "CD8+ CM", "CD8+ EM", "CD8+ EMRA")
+
+pdf("output/F2/Flow_Human_Heatmap.pdf", useDingbats = F)
+draw(Heatmap(result ,
+          cluster_rows = FALSE,
+          cluster_columns = FALSE,
+          cluster_row_slices = FALSE,
+          show_heatmap_legend = FALSE,
+          col = colvec_flow,
+          row_gap = unit(4, "mm"),
+          rect_gp = gpar(col = "white", lwd = 2)),
+          padding = unit(c(3, 3, 3, 30), "mm"))
+
+draw(legend_flow, 
+     just = c("left", "bottom"),
+     x = unit(0.80, "npc"), 
+     y = unit(0.725, "npc"))
+
+dev.off()
+
+pdf("output/F2/Flow_Human_Heatmap_points.pdf", width = 2.7, height = 5, useDingbats = F)
+draw(Heatmap(result ,
+          cluster_rows = FALSE,
+          cluster_columns = FALSE,
+          cluster_row_slices = FALSE,
+          show_heatmap_legend = FALSE,
+          col = colvec_flow,
+          row_gap = unit(3, "mm"),
+          rect_gp = gpar(col = "white", lwd = 2),
+          cell_fun = function(j, i, x, y, width, height, fill){
+            if(significance[i,j]){
+              grid.points(x, y, pch = 16, size = unit(2, "mm"))
+            }
+          }
+          ),
+          padding = unit(c(3, 3, 3, 3), "mm"))
+
+# draw(legend_flow, 
+#      just = c("left", "bottom"),
+#      x = unit(0.80, "npc"), 
+#      y = unit(0.725, "npc"))
+dev.off()
+
+```
+
+
+```{r Slope HeatMaps}
+all_types <- c(main_types, CD4_list, CD8_list)
+# split gender
+
+
+df_list <- lapply(all_types, function(type){
+  summary_all <- summary(lm((human[,type][[1]] %>% as.numeric)~human$age, na.action = na.omit))$coef[,c(1,4)]
+  
+# Coef and P-val
+data.frame(Type = type, Sign = sign(summary_all[2,1]), 
+           p = summary_all[2,2], Gender = "Both", stringsAsFactors = F) 
+})
+
+df <- do.call("rbind", df_list)
+df$p <- df$p %>% as.numeric
+df$Sign <- df$Sign %>% as.numeric
+
+df$adj.p <- p.adjust(df$p, "fdr")
+df$log.adj.p <- log(df$adj.p) * (-1)
+df$Significant <- df$adj.p < 0.05
+
+MAX=max(abs(df$Sign*df$log.adj.p))+1
+breaksList = seq(-MAX, MAX, by = 1)
+colvec_flow=colorRamp2(breaksList, generate_cool_warm(length(breaksList)))
+
+legend_flow <- Legend(col_fun = colvec_flow, 
+                title = "-log (adj p) * direction",
+                title_position = "topcenter",
+                at = pretty(trunc(breaksList), n = 3),
+                legend_height = unit(4, "cm"))
+
+df$Result <- df$Sign * df$log.adj.p
+result <- matrix(df$Result, nrow = 1) %>% t
+significance <- matrix(df$Significant, nrow = 1) %>% t
+
+rownames(result) <- df$Type %>% unique()
+colnames(result) <- c("Both Sexes")
+
+# [1] "CD4T"               "CD8T"               "CD19"               "MONOCYTES"          "CD4TNAIVE"         
+# [6] "CD4TCENTRALMEMORY"  "CD4TEFFECTORMEMORY" "CD4TEFFECTOR"       "CD8TNAIVE"          "CD8TCENTRALMEMORY" 
+# [11]"CD8TEFFECTORMEMORY" "CD8TEFFECTOR"   
+rownames(result) <- c("CD4+", "CD8+", "CD19+", "CD14+", "Other",
+                      "CD4+ Naive", "CD4+ CM", "CD4+ EM", "CD4+ EMRA", 
+                      "CD8+ Naive", "CD8+ CM", "CD8+ EM", "CD8+ EMRA")
+
+pdf("output/F2/Flow_Human_Heatmap_Both_Gender_Togetger.pdf", useDingbats = F, width = 3, height = 5)
+draw(Heatmap(result ,
+          cluster_rows = FALSE,
+          cluster_columns = FALSE,
+          cluster_row_slices = FALSE,
+          show_heatmap_legend = FALSE,
+          col = colvec_flow,
+          row_gap = unit(4, "mm"),
+          rect_gp = gpar(col = "white", lwd = 2)),
+          padding = unit(c(3, 3, 3, 30), "mm"))
+
+draw(legend_flow, 
+     just = c("left", "bottom"),
+     x = unit(0.80, "npc"), 
+     y = unit(0.725, "npc"))
+
+dev.off()
+
+pdf("output/F2/Flow_Human_Heatmap_points_Both_Gender_Togetger.pdf", width = 2, height = 5, useDingbats = F)
+draw(Heatmap(result ,
+          cluster_rows = FALSE,
+          cluster_columns = FALSE,
+          cluster_row_slices = FALSE,
+          show_heatmap_legend = FALSE,
+          col = colvec_flow,
+          row_gap = unit(3, "mm"),
+          rect_gp = gpar(col = "white", lwd = 2),
+          cell_fun = function(j, i, x, y, width, height, fill){
+            if(significance[i,j]){
+              grid.points(x, y, pch = 16, size = unit(2, "mm"))
+            }
+          }
+          ),
+          padding = unit(c(3, 3, 3, 3), "mm"))
+
+# draw(legend_flow, 
+#      just = c("left", "bottom"),
+#      x = unit(0.80, "npc"), 
+#      y = unit(0.725, "npc"))
+dev.off()
+
+```
+
+
+```{r Lasso model human}
+# To run glmnet we need either fill up or omit samples with NA
+train <- human[,c("age", all_list)] %>% na.omit
+
+# Convert to numeric 
+train.converted <- apply(train, 2, as.numeric) %>% as.data.frame
+
+# Predictor variables
+x <- model.matrix(age ~ . , train.converted)[,-1] 
+
+# Outcome variable
+y.orig <- train.converted$age
+
+  
+# 10 fold cross validation procedure minimizing CVM
+cv <- cv.glmnet(x, y.orig, alpha = 1, nfold = 10)
+
+# Create lasso model
+lassomodel <- glmnet(x, y.orig, alpha = 1, lambda = cv$lambda.min) 
+
+#see coefs for cell types   
+coef(lassomodel)
+
+# predict all ages with the best model
+y.pred <- predict(lassomodel, newx = x, s = "lambda.min")
+
+# Residuals
+y.orig - y.pred
+
+
+df.lasso.human <- data.frame (sex = human %>% na.omit %>% dplyr::select(sex) %>% as.vector, 
+              y.orig = y.orig, 
+              y.pred = y.pred %>% as.vector, stringsAsFactors = F) 
+
+
+# Lin's concordance value
+# We use it to assess the agreement between predicted and chronological ages
+concordance <- CCC(df.lasso.human$y.orig, df.lasso.human$y.pred)[[1]][[1]]
+
+# stat_eq
+formula <- y ~ poly(x, 1, raw = TRUE)
+flow.lasso.human.plot <- df.lasso.human %>% 
+  ggplot(aes(y.orig, y.pred)) + 
+  geom_jitter(aes(color = sex), size = 3, width = 0.2, height = 0.2) + theme_pubr() +
+  geom_smooth(method = "lm", se =F, formula = formula, color = "darkgray") + 
+  ylab("") + xlab("") + scale_color_manual(values = color_values) + 
+  scale_x_continuous(limits = c(10,100), breaks = c(20,60,100)) + 
+  scale_y_continuous(limits = c(10,100), breaks = c(20,60,100)) + 
+  ggtitle ("Human cohort") + 
+  stat_poly_eq(label.x = 0.95, 
+               label.y = 0.1, size = 3.5, color = "black",
+               aes(label = paste("atop(", stat(rr.label), ")", sep = "")), 
+               formula = formula, coef.digits = 3,
+               parse = TRUE) +
+  geom_text(aes(x=90, y=20, label=paste0("CCC: ",signif(concordance,2))), size=3.5, data = data.frame()) + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+            plot.title = element_text(hjust = 0.5, size = 16),
+            strip.background = element_blank(),
+            strip.text.x = element_blank(),
+            legend.position = "none")
+
+ggsave(plot = flow.lasso.human.plot, filename = "output/F2/flow_human_lasso.pdf",
+       useDingbats = F, width = 3.5, height = 3.5)
+```
+
+```{r human main cell types pie chart}
+color.palette <- paletteer_d("ggsci::nrc_npg")
+
+df.pie <- human[,c("sex", "group", main_types)]
+df.pie$Innate <- df.pie$CD14 + df.pie$OTHER
+
+df.pie <- subset(df.pie, select = -c(CD14, OTHER))
+
+df.pie <- df.pie %>% 
+  reshape2::melt (id.vars = c("sex", "group"), variable.name = "cell.type")
+
+
+
+
+df.pie.means <- df.pie %>% group_by(cell.type ,sex, group) %>% summarize(value = sum(value)/n()) %>% filter(group != "HM")
+
+df.pie.means %>% group_by(cell.type, group) %>% summarize(value = sum(value)/n()) 
+
+df.pie.means$cell.type <- 
+  factor(df.pie.means$cell.type, levels = c("CD19", "CD4T", "CD8T", "Innate"))
+df.pie.means$group <- factor(df.pie.means$group, levels = c("HY", "HO"), labels = c("Young", "Old")) 
+
+plot.cell.type.pie <- ggplot(df.pie.means, aes(x = 1, y = value, fill = cell.type)) +
+  geom_bar(stat = "identity", width=1, color="white") + 
+  facet_wrap(~ sex + group, nrow = 1, strip.position = "left") + 
+  coord_polar("y") + theme_void(base_size = 10) + 
+  scale_fill_manual(values = color.palette) + 
+  xlab("") + ylab("") + labs(fill = "Cell Type") + guides(fill=guide_legend(ncol=2))
+
+ggsave(plot = plot.cell.type.pie, filename = "output/F2/main_cell_types_pie_human.pdf")
+```
+
+
+
+

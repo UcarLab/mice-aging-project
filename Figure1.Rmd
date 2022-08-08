@@ -1,0 +1,1077 @@
+---
+title: "Experimental design, data overview and principal component analysis"
+author: "E Onur Karakaslar, ..., Duygu Ucar"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+
+```{r libraries, include=FALSE, echo=TRUE}
+library(pheatmap)
+library(reshape2)
+library(ggplot2)
+library(edgeR)
+library(grid)
+library(gridExtra)
+library(gtable)
+library(viridis)
+library(ggsci)
+library(patchwork)
+library(cowplot)
+library(ggpubr)
+library(magick)
+library(ggrepel)
+library(dplyr)
+library(scales)
+library(tidyr)
+library(tidyverse)
+library(readxl)
+library(paletteer)
+```
+
+
+```{r setup, include=FALSE}
+require(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+opts_knit$set(root.dir = "/Users/karako/Dropbox (JAX)/MouseAging_clean/NatureAgingSubmission/") #set root dir!
+```
+
+```{r initialise, include=TRUE, echo=TRUE}
+nosex=T
+
+produce_pdfs <- TRUE
+
+pca_var_cutoff <- 1 #0.9  1
+
+# controls whether intersections will be used for explaining the variances
+inter <- F
+
+drawtable <- function(tab,title, center = FALSE){
+  t1 <- tableGrob(tab)
+  title <- textGrob(title)
+  padding <- unit(5,"mm")
+  table <- gtable_add_rows(t1, heights = grobHeight(title) + padding,pos = 0)
+  
+  position = ifelse(center, 2, 1)
+  
+  table <- gtable_add_grob(table, title,  1, position, 1, ncol(table))
+  return(table)
+}
+
+source("code/library_function_wf_flow.r")
+source("code/PVCA_wf.r")
+
+PCA <- function(emat, color.var, title_, colour_by){
+  # emat <- t(dat[rowSums(is.na(dat))==0,])
+  # color.var <- meta[rowSums(is.na(dat))==0,]
+  # title_ <- "Flow"
+  # colour_by <- "Tissue"
+  
+  color.var[,"tissue"][ c(which(color.var[,"tissue"] == "CD8.memory"),
+                        which(color.var[,"tissue"] == "memory"))] <- "CD8+ memory"
+  color.var[,"tissue"][ c(which(color.var[,"tissue"] == "CD8.naive"),
+                        which(color.var[,"tissue"] == "naive"))] <- "CD8+ naive"
+  
+  emat=emat[rowSums(emat)>0,]
+  pca=prcomp(t(emat),center=T,scale=T)
+  
+  d <- round(pca$sdev^2/sum(pca$sdev^2)*100, digits=1)
+  xl <- sprintf("PC 1: %.1f %%", d[1])
+  yl <- sprintf("PC 2: %.1f %%", d[2])
+  df=data.frame(PC1=as.numeric(pca$x[,1]),
+                 PC2=as.numeric(pca$x[,2]),
+                 Tissue=factor(color.var[,"tissue"], 
+                               levels = c("PBL", "spleen", "CD8+ memory", "CD8+ naive")),
+                 Strain=color.var[,"strain"],
+                 Age=factor(color.var[,"age"], levels = c("3", "12", "18")),
+                 Gender=color.var[,"gender"])
+  
+
+  p <- ggplot(df, aes(PC1,PC2)) + 
+      geom_point(aes(color=df[,colour_by]), size = 2) +
+      labs(x=xl,y=yl,color=colour_by,title=title_) +
+      scale_colour_manual(values=color_values) +
+      theme_bw() +
+      # added coord fixed so that aspect ratio will correspond to % of variance
+      coord_fixed(ratio = 1) + 
+      theme(aspect.ratio=1, legend.position="top")
+  
+  
+  return(p)
+}
+
+groupings <- c("Tissue", "Gender", "Age", "Strain")
+
+```
+
+```{r sample_table_flow, echo=TRUE, include=TRUE}
+
+## Load Ahrim's Data ###############
+
+# load("data/flow/flow_data_table.Rdata")
+# 
+# flow[flow=="SPL"]="spleen"
+# 
+# flow[,4]=round(as.numeric(flow[,4])*7/30)
+# flow[flow[,4]==13,4]=12
+# flow[flow[,4]==17,4]=18
+# flow=flow[flow[,"tissue"]!="BM",]
+# 
+# ### remove problematic middle age samples
+# flow=flow[flow[,"age"]!=6 ,]
+# 
+# meta=flow[,1:4]
+
+####################################
+
+## Load Onur's Data ################
+
+flow <- read_excel("data/flow/raw/Flow_Data_Merged_v2.xlsx", trim_ws = T)
+flow[flow=="SPL"]="spleen"
+flow[,"Age"] <- round((flow[,"Age"]) * 7/30)
+flow[flow[,"Age"] == 13, "Age"]=12
+flow[flow[,"Age"] == 17, "Age"]=18
+
+meta <- flow [,c(1,2,4,3)] # Tissue, Strain, Age, Gender
+
+flow <- flow %>% as.matrix
+meta <- meta %>% as.matrix
+meta[,"Age"]<- sapply(meta[,"Age"],str_trim)
+```
+
+
+```{r plot1, echo=FALSE, include=TRUE, message=FALSE}
+source("code/PVCA_wf.r")
+colnames(meta) = c("tissue","strain","age","gender")
+
+dat = as.matrix(flow[,-(1:5)])
+dat = matrix(as.numeric(dat), nr=nrow(dat), nc=ncol(dat))
+colnames(dat) = colnames(flow)[-(1:5)]
+
+dat=dat[,-c(26:36,48:51)] # Exclude CD38 and viable etc from analysis
+
+
+res_flow = PVCA(t(dat[rowSums(is.na(dat))==0,]),
+          meta[rowSums(is.na(dat))==0,],
+          pca_var_cutoff, inter = inter)
+
+flow_pca_in <- t(dat[rowSums(is.na(dat))==0,])
+flow_pca_meta <- meta[rowSums(is.na(dat))==0,]
+flow_pca_meta[,"age"] <- sapply(flow_pca_meta[,"age"], function(x){
+  x %>% str_trim
+})
+
+p1 = PCA(flow_pca_in, flow_pca_meta,
+  "Flow", "Tissue")
+
+meta_flow <- flow_pca_meta
+
+if(produce_pdfs){
+  ggsave("output/F1/flow_pca.pdf",
+         plot = p1,
+         units = "in",
+         width = 5, 
+         height = 3.2,
+         useDingbats = FALSE)
+  
+  ggsave("output/F1/flow_pca.png",
+         plot = p1,
+         units = "in",
+         width = 5, 
+         height = 3.2,
+         dpi = 300)
+}else{
+  print(p1)
+}
+
+```
+
+```{r plot_flow_by_factors, echo=FALSE, include=TRUE}
+
+plot_flow_list <- lapply(groupings, function(g){
+  PCA(t(dat[rowSums(is.na(dat))==0,]), meta[rowSums(is.na(dat))==0,],
+  "Flow", g)
+})
+
+plots_list <- wrap_elements(
+  (plot_flow_list[[1]] + ggtitle("")) + 
+  (plot_flow_list[[2]] + ggtitle("") + labs(colour = "Sex")) + 
+  (plot_flow_list[[3]] + ggtitle("")) + 
+  (plot_flow_list[[4]] + ggtitle("")) + 
+  plot_layout(ncol = 4, nrow = 1, ))
+  #ggtitle(paste0("PCA plots: Flow cytometry data, N = ", dim(meta_flow)[1]))
+
+if(produce_pdfs){
+  ggsave("output/F1/flow_pca_all.pdf", 
+         plot = plots_list,
+         width = 14, 
+         height = 6, 
+         units = "in",
+         useDingbats = FALSE)
+  
+  ggsave("output/F1/flow_pca_all.png", 
+         plot = plots_list,
+         width = 10, 
+         height = 6.5, 
+         units = "in",
+         dpi = 300)
+}else{
+  print(plots_list)
+}
+
+```
+
+
+
+```{r sample_tables_ATAC, echo=FALSE, message=FALSE}
+## Load Ahrim's Data
+# load("data/ATACseq/F1_input/ATACseqData2.Rdata")
+# TISSUE <- gsub("\\.", "+ ", TISSUE)
+
+## Load Onur's Data
+load('data/ATACseq/F1_input/Consensus Peaks/atac_seq_consensus_all.Rdata')
+
+rownames(bed) <- paste0(bed[,1],"_", bed[,2],"_", bed[,3]) 
+
+# filter (chr, start, end) and BM data
+bed<-bed[,-c(1,2,3, 18,20,23,25,26,52,53,54,58,59,60,73,74,79,83,84,86,92,93,99,103,106)]
+
+# Filter low-expressed peaks
+# Keep the peak that have Count-Per-Million more than k = 4 in n = 2 samples
+# It is pretty similar to filterByExpr(y, min.count = 0.5) but its choice of n is different.
+bed.filtered <- bed[rowSums(cpm(bed) >= 4) >= 2,]
+
+# normalize with cpm
+bed.normalized <- cpm(bed.filtered, log = T)
+
+sample_atac <- colnames(bed) %>% strsplit("-")
+
+STRAIN = TYPE <- sapply(sample_atac, function(x){
+  x[1]
+})
+
+AGE <- sapply(sample_atac, function(x){
+  as.numeric(gsub("([0-9]+).*$", "\\1", x[2] %>% trimws)) 
+}) 
+
+GENDER <- sapply(sample_atac, function(x){
+  x[3]
+})
+
+TISSUE <- sapply(sample_atac, function(x){
+  x[4]
+})
+
+SAMPLEMOUSEID <- sapply(sample_atac, function(x){
+  x[5]
+})
+
+
+```
+
+```{r plot2, message=FALSE, echo=FALSE}
+
+color.var = cbind(TISSUE, STRAIN, AGE, GENDER)
+
+colnames(color.var) <- tolower(colnames(color.var))
+
+res_atac = PVCA(bed.normalized, color.var, pca_var_cutoff, inter = inter) # it was exp(bed[,])
+
+p2=PCA(bed.normalized, color.var ,"ATACseq", "Tissue")
+
+meta_atac <- color.var
+
+if(produce_pdfs){
+  ggsave("output/F1/ATACseq_pca.pdf",
+         plot = p2,
+         units = "in",
+         width = 5, 
+         height = 3.2,
+         useDingbats = FALSE)
+  
+  ggsave("output/F1/ATACseq_pca.png",
+         plot = p2,
+         units = "in",
+         width = 5, 
+         height = 3.2,
+         dpi = 300)
+}else{
+  invisible(print(p2))
+}
+
+dim_atac <- dim(bed)
+```
+
+
+```{r plot_ATACseq_by_all, echo=FALSE, include=TRUE}
+
+plot_list_ATACseq <- lapply(groupings, function(g){
+   PCA(bed.normalized, color.var ,"ATACseq", g)
+})
+
+atac_plot_list <- wrap_elements(
+  (plot_list_ATACseq[[1]] + ggtitle(""))  + 
+  (plot_list_ATACseq[[2]] + ggtitle("") + labs(colour = "Sex")) + 
+  (plot_list_ATACseq[[3]] + ggtitle("")) +
+  (plot_list_ATACseq[[4]] + ggtitle("")) +
+  plot_layout(ncol = 4, nrow = 1, ))
+  # ggtitle(paste0("PCA plots: ATACseq data, N = ", dim(meta_atac)[1]))
+
+
+if(produce_pdfs){
+  ggsave("output/F1/ATACseq_pca_all.pdf", 
+         plot = atac_plot_list,
+         width = 14, 
+         height = 6, 
+         units = "in",
+         useDingbats = FALSE)
+  
+   ggsave("output/F1/ATACseq_pca_all.png", 
+         plot = atac_plot_list,
+         width = 10, 
+         height = 6.5, 
+         units = "in",
+         dpi = 300)
+}else{
+  print(atac_plot_list)
+}
+```
+
+
+
+```{r table_RNA, include=TRUE, echo=TRUE}
+## Loads Ahrim's data
+
+#load("data/RNAseq/F1_input/RNAseqData2.Rdata")
+
+# TISSUE <- gsub("\\.", "+ ", TISSUE)
+
+## Load Onur's data
+count.matrix <- read.csv('data/RNAseq/F1_input/rna_count_matrix.csv', row.names = 1, check.names = F, stringsAsFactors = F)
+
+# Order genes according to their standard deviation in decreasing order
+count.matrix <- count.matrix [rev(order(apply(count.matrix, 1, sd))),]
+
+# Remove duplicated genes
+count.matrix <- count.matrix [!duplicated(rownames(count.matrix)),]
+
+
+# Enforce all counts to be integers
+count.matrix <- round(count.matrix, 0)
+
+# remove low expressed genes      
+count.matrix <- count.matrix [rowSums(cpm(count.matrix) >= 0.5) >= 2,]
+
+# filter BM
+BM.loc <- colnames(count.matrix) %>% sapply(function(x){grepl("BM", x, fixed = TRUE)})
+count.matrix <- count.matrix[,!BM.loc]
+
+# normalize with cpm
+count.matrix.normalized <- cpm(count.matrix, log = T)
+
+sample_rna <- colnames(count.matrix) %>% strsplit("-")
+
+STRAIN = TYPE <- sapply(sample_rna, function(x){
+  x[1]
+})
+
+AGE <- sapply(sample_rna, function(x){
+  as.numeric(gsub("([0-9]+).*$", "\\1", x[2] %>% trimws)) 
+}) 
+
+GENDER <- sapply(sample_rna, function(x){
+  x[3]
+}) 
+
+TISSUE <- sapply(sample_rna, function(x){
+  x[4]
+}) 
+TISSUE [TISSUE == "naive"] <- "CD8+ naive"
+TISSUE [TISSUE == "memory"] <- "CD8+ memory"
+
+SAMPLEMOUSEID <- sapply(sample_rna, function(x){
+  x[5]
+}) 
+
+write.csv(cbind(ID = colnames(count.matrix), TYPE, TISSUE,STRAIN,AGE,GENDER), 
+          file = "Supplementary/Summary Tables/extras/RNAseq_samples_table.csv")
+```
+
+
+```{r plot3, echo=FALSE, message=FALSE, include=TRUE}
+
+color.var=cbind(TISSUE,STRAIN,AGE,GENDER)
+
+colnames(color.var) <- tolower(colnames(color.var))
+
+res_rna = PVCA((count.matrix.normalized), # There was an exponential component
+            color.var,
+            pca_var_cutoff, inter = inter)
+
+p3=PCA(count.matrix.normalized,color.var,"RNAseq","Tissue")
+
+meta_rna <- color.var
+
+dim_rna <- dim(count.matrix)
+
+if(produce_pdfs){
+    ggsave("output/F1/RNAseq_pca.pdf",
+         plot = p3,
+         units = "in",
+         width = 5, 
+         height = 3.2,
+         useDingbats = FALSE)
+  
+  ggsave("output/F1/RNAseq_pca.png",
+         plot = p3,
+         units = "in",
+         width = 5, 
+         height = 3.2,
+         dpi = 300)
+}else{
+  invisible(print(p3))
+}
+
+
+
+```
+
+```{r plot_RNAseq_by_factors, include=TRUE, echo=FALSE}
+
+plot_RNAseq_list <- lapply(groupings, function(g){
+  PCA(count.matrix.normalized,color.var,"RNAseq",g)
+})
+
+rna_plot_list <- wrap_elements(
+  (plot_RNAseq_list[[1]] + ggtitle("") + theme(aspect.ratio=1)) + 
+  (plot_RNAseq_list[[2]] + ggtitle("") + theme(aspect.ratio=1) + labs(colour = "Sex")) + 
+  (plot_RNAseq_list[[3]] + ggtitle("") + theme(aspect.ratio=1)) +
+  (plot_RNAseq_list[[4]] + ggtitle("") + theme(aspect.ratio=1)) + 
+  plot_layout(ncol = 4, nrow = 1, ))
+  # ggtitle(paste0("PCA plots: RNAseq data, N = ", dim(meta_rna)[1]))
+
+if(produce_pdfs){
+  ggsave("output/F1/RNAseq_pca_all.pdf", 
+         plot = rna_plot_list,
+         width = 16, 
+         height = 6, 
+         units = "in",
+         useDingbats = FALSE)
+  
+  ggsave("output/F1/RNAseq_pca_all.png", 
+         plot = rna_plot_list,
+         width = 10, 
+         height = 6.5, 
+         units = "in",
+         dpi = 300)
+}else{
+  print(rna_plot_list)
+}
+
+```
+
+
+
+```{r meta_data_clean, echo=FALSE, include=TRUE}
+
+prettify_and_reorder_table_rows <- function(dfx){
+  rownames(dfx) <- dfx$tissue
+  
+  if (ncol(dfx) > 3){
+    dfx <- dfx %>% dplyr::select("3", "12", "18")
+  } else {
+    dfx <- dfx %>% dplyr::select("12", "18")
+  }
+  
+  if(nrow(dfx) == 5){
+    dfx <- dfx[c("PBL", "spleen", "CD8+ memory", "CD8+ naive", "BM"),]
+  } else if(nrow(dfx) == 4){
+    dfx <- dfx[c("PBL", "spleen", "CD8+ memory", "CD8+ naive"),]
+  } else{
+    dfx <- dfx[c("PBL", "spleen"),]
+  }
+  return(dfx)
+}
+
+pca_samples_clean <- function(chr_mat){
+  #chr_mat <- meta_atac
+  
+  df <- data.frame(chr_mat)
+  df$age <- as.numeric(as.character(df$age))
+  
+  df2 <- df %>% 
+    dplyr::group_by(tissue, strain, age) %>%
+    dplyr::tally()
+  
+  df_b6 <- df2 %>%
+    dplyr::filter(strain == "B6") %>%
+    dplyr::ungroup() %>%
+    dplyr::select(tissue, age, n) %>%
+    reshape2::dcast(tissue ~ age, value.var = "n") %>%
+    tidyr::replace_na(list("12" = 0))
+  
+  df_nzo <- df2 %>%
+    filter(strain == "NZO") %>%
+    dplyr::ungroup() %>%
+    dplyr::select(tissue, age, n) %>%
+    reshape2::dcast(tissue ~ age, value.var = "n") %>%
+    tidyr::replace_na(list("12" = 0))
+  
+  #sum(df_b6[,c(2:4)])
+  
+  #sum(df_nzo[,c(2:4)])
+  if (dim(df_nzo)[2] == 3){
+    sum_df <- sum(sum(df_b6[,c(2:4)]), sum(df_nzo[,c(2:3)]))
+  } else {
+    sum_df <- sum(sum(df_b6[,c(2:4)]), sum(df_nzo[,c(2:4)]))
+  }
+  if( sum_df != nrow(chr_mat)){
+    cat("YIKES, sums don't match!")
+    stop()
+  }
+  
+  df_b6 <- prettify_and_reorder_table_rows(df_b6)
+  df_nzo <- prettify_and_reorder_table_rows(df_nzo)
+  
+  return(list(b6_tbl = as.matrix(df_b6), 
+              nzo_tbl = as.matrix(df_nzo)))
+  
+}
+
+
+# bug fix (Jan 20, 2019)
+meta_atac[which(meta_atac[,1]=="memory"),1] <- "CD8+ memory" 
+meta_atac[which(meta_atac[,1]=="naive") ,1] <- "CD8+ naive" 
+
+
+list_meta <- list(meta_flow, meta_atac, meta_rna)
+
+
+
+dfs_of_samples <- lapply(list_meta, pca_samples_clean)
+
+names(dfs_of_samples) <- c("Flow", "ATAC", "RNA")
+
+
+```
+
+
+
+```{r plot_0, echo=TRUE, include=TRUE}
+
+factor <- c(names(res_flow),names(res_atac),names(res_rna))
+factor[factor=="resid"] = "unexplained"
+
+
+pal <- tableau_color_pal(palette = "Tableau 10")
+
+if (inter){
+  factor[factor %in% c("tissue:gender", "age:gender")] = "Other Interactions"
+  factor[factor %in% "tissue:strain"] = "Tissue & Strain"
+  factor[factor %in% "tissue:age"] = "Tissue & Age"
+  factor[factor %in% "strain:age"] = "Strain & Age"
+  factor[factor %in% "strain:gender"] = "Strain & Gender"
+  
+  ggdf=data.frame(data=rep(c("Flow\nCytometry","ATACseq","RNAseq"),each=length(res_flow)),
+                  value=c(res_flow, res_atac, res_rna),Factor=factor)
+  ggdf <- ggdf %>% group_by(data,Factor) %>% summarise(value = sum(value))
+  ggdf$data=factor(ggdf$data,levels=rev(c("Flow\nCytometry","ATACseq","RNAseq")))
+  ggdf$Percentage <- sprintf("%1.2f%%", ggdf$value*100)
+  
+  firstup <- function(x){
+    if(!is.numeric(substr(x, 1, 1))){
+      substr(x, 1, 1) <- toupper(substr(x, 1, 1))
+    }
+    return(x)
+  }
+  
+  ggdf1 <- ggdf
+  
+  ggdf1$Factor <- sapply(as.character(ggdf1$Factor), firstup)
+  ggdf1$Factor <- factor(ggdf1$Factor, c("Tissue",
+                                         "Age",
+                                         "Strain",
+                                         "Gender",
+                                         "Tissue & Age",
+                                         "Tissue & Strain",
+                                         "Strain & Gender",
+                                         "Strain & Age",
+                                         "Other Interactions",
+                                         "Unexplained"))
+  
+  p0 = ggplot(ggdf1, aes(x = data, y = value, fill = Factor, 
+                         label= ifelse(value > 0.05, Percentage, ""))) +
+    theme_minimal() +
+    geom_bar(stat = "identity") + 
+    theme(axis.text.x = element_text(hjust = 0.5,
+                                     margin = margin(c(rep(2,4)),
+                                                     unit = "mm")),
+          legend.spacing.x = unit(2, 'mm'),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.x = element_blank(),
+          axis.ticks.length = unit(0,'mm')) + 
+    xlab("") +
+    ylab("Proportion of variance") +
+    scale_fill_manual(values=c(pal(9),"#c9c9c9")) +
+    # ggtitle("Proportion of variance explained by each factor") +
+    theme(legend.title = element_blank()) +
+    scale_y_continuous(expand = c(0, 0),
+                       breaks = (c(0, 0.2, 0.4, 0.6, 0.8, 1)),
+                       labels = percent(c(0, 0.2, 0.4, 0.6, 0.8, 1))) +
+    coord_flip() +
+    guides(fill=guide_legend(ncol=2))
+  
+  p0_w_labels <- p0 + 
+    geom_text(size = 2.5, 
+              position = position_stack(vjust = 0.5), color = "#ffffff") +
+    scale_y_continuous(expand = c(0.02, 0),
+                     breaks = (c(0, 0.2, 0.4, 0.6, 0.8, 1)),
+                     labels = percent(c(0, 0.2, 0.4, 0.6, 0.8, 1)))
+  
+  
+  if(produce_pdfs){
+    ggsave(plot = p0, 
+           width = 6, 
+           height = 2, 
+           dpi = 300, 
+           units = "in",
+           filename = "output/F1/variance_explained_intersections.png")
+  
+    ggsave(plot = p0, 
+           width = 6, 
+           height = 2, 
+           useDingbats = FALSE,
+           filename = "output/F1/variance_explained_intersections.pdf")
+  
+    ggsave(plot = p0_w_labels, 
+           width = 6, 
+           height = 2,
+           units = "in",
+           dpi = 300,
+           filename = "output/F1/variance_explained_intersections_text.png")
+    
+    ggsave(plot = p0_w_labels,
+           width = 6, 
+           height = 2, 
+           units = "in",
+           useDingbats = FALSE,
+           filename = "output/F1/variance_explained_intersections_text.pdf")
+    
+  }else{
+    invisible(print(p0))
+    invisible(print(p0_w_labels))
+  }
+} else{
+  ggdf=data.frame(data=rep(c("Flow\nCytometry","ATAC-seq","RNA-seq"),each=length(res_flow)),
+                  value=c(res_flow, res_atac, res_rna),Factor=factor)
+  ggdf <- ggdf %>% group_by(data,Factor) %>% summarise(value = sum(value))
+  ggdf$data=factor(ggdf$data,levels=rev(c("Flow\nCytometry","ATAC-seq","RNA-seq")))
+  ggdf$Percentage <- sprintf("%1.2f%%", ggdf$value*100)
+  
+  firstup <- function(x){
+    if(!is.numeric(substr(x, 1, 1))){
+      substr(x, 1, 1) <- toupper(substr(x, 1, 1))
+    }
+    return(x)
+  }
+  
+  ggdf1 <- ggdf
+  ggdf1$Factor <- sapply(as.character(ggdf1$Factor), firstup)
+  
+  p0 = ggplot(ggdf1, aes(x = data, y = value, fill = Factor, 
+                         label= ifelse(value > 0.05, Percentage, ""))) +
+    theme_minimal() +
+    geom_bar(stat = "identity") + 
+    theme(axis.text.x = element_text(hjust = 0.5,
+                                     margin = margin(c(rep(2,4)),
+                                                     unit = "mm")),
+          legend.spacing.x = unit(2, 'mm'),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.x = element_blank(),
+          axis.ticks.length = unit(0,'mm')) + 
+    xlab("") +
+    ylab("Proportion of variance") +
+    scale_fill_manual(values=c(pal(4),"#c9c9c9")) +
+    # ggtitle("Proportion of variance explained by each factor") +
+    theme(legend.title = element_blank()) +
+    scale_y_continuous(expand = c(0, 0),
+                       breaks = (c(0, 0.2, 0.4, 0.6, 0.8, 1)),
+                       labels = percent(c(0, 0.2, 0.4, 0.6, 0.8, 1))) +
+    coord_flip()
+  
+  p0_w_labels <- p0 + 
+    geom_text(size = 2.5, 
+              position = position_stack(vjust = 0.5), color = "#ffffff") +
+    scale_y_continuous(expand = c(0.02, 0),
+                     breaks = (c(0, 0.2, 0.4, 0.6, 0.8, 1)),
+                     labels = percent(c(0, 0.2, 0.4, 0.6, 0.8, 1)))
+  
+  
+  if(produce_pdfs){
+    ggsave(plot = p0, 
+           width = 5, 
+           height = 2, 
+           dpi = 300, 
+           units = "in",
+           filename = "output/F1/variance_explained_no_inter.png")
+  
+    ggsave(plot = p0, 
+           width = 5, 
+           height = 2, 
+           useDingbats = FALSE,
+           filename = "output/F1/variance_explained_no_inter.pdf")
+  
+    ggsave(plot = p0_w_labels, 
+           width = 6, 
+           height = 2,
+           units = "in",
+           dpi = 300,
+           filename = "output/F1/variance_explained_no_inter_text.png")
+    
+    ggsave(plot = p0_w_labels,
+           width = 6, 
+           height = 2, 
+           units = "in",
+           useDingbats = FALSE,
+           filename = "output/F1/variance_explained_no_inter_text.pdf")
+    
+  }else{
+    invisible(print(p0))
+    invisible(print(p0_w_labels))
+  }  
+}
+```
+
+
+```{r plotAll, include=TRUE, echo=TRUE}
+
+f_title <- textGrob("Flow Cytometry", rot = 90, gp = gpar(fontsize = 14))
+
+a_title <- textGrob("ATACseq", rot = 90, gp = gpar(fontsize = 14))
+
+r_title <- textGrob("RNAseq", rot = 90, gp = gpar(fontsize = 14))
+
+b6 <- gtable_combine(drawtable(dfs_of_samples[["Flow"]][["b6_tbl"]], "B6", TRUE),
+                     drawtable(dfs_of_samples[["ATAC"]][["b6_tbl"]], ""),
+                     drawtable(dfs_of_samples[["RNA"]][["b6_tbl"]], ""),
+                     along = 2)
+
+nzo <- gtable_combine(drawtable(dfs_of_samples[["Flow"]][["nzo_tbl"]], "NZO", TRUE),
+                     drawtable(dfs_of_samples[["ATAC"]][["nzo_tbl"]], ""),
+                     drawtable(dfs_of_samples[["RNA"]][["nzo_tbl"]], ""),
+                     along = 2)
+
+fra <- gtable_cbind(b6, nzo)
+
+##### add titles
+fra_pad <- gtable_add_padding(fra, unit(c(0,0,0,1), "cm"))
+
+fra2 <- gtable_add_grob(fra_pad, f_title, t=2, b = 7, l = 1)
+
+fra3 <- gtable_add_grob(fra2, a_title, t = 7, b = 12, l = 1)
+
+fra4 <- gtable_add_grob(fra3,  r_title, t = 14, b = 18, l = 1)
+
+tables_title <- textGrob("Number of samples", gp = gpar(fontsize = 20,
+                                                        fontface = "bold"))
+
+fra5 <- gtable_add_padding(fra4, unit(c(0,0,0,0), "cm")) 
+
+fra6 <- gtable_add_grob(fra5, tables_title, t=1, b = 1, l=1, r = 12)
+
+fra7 <- as_ggplot(fra4) +
+  ggtitle( "Number of samples") +
+  theme(plot.title = element_text(size = 14, hjust = 0.25))# +
+
+if(produce_pdfs){
+  pdf(file = "output/F1/all_tables.pdf", width = 5, height = 4.6)
+}
+grid.arrange(fra5)
+if(produce_pdfs){
+  dev.off()
+}
+```
+
+
+
+
+```{r combine_all_plots, include=FALSE,echo=FALSE}
+
+# all_in_grid <- plot_grid(NULL, as_ggplot(fra4), p0, p1, p2, p3, ncol = 3)
+# 
+# 
+# 
+# fra_for_mul <- as_ggplot(fra4)
+# 
+# fra_for_mul <- fra_for_mul + labs(title = "Number of samples")
+# 
+# topRow <- plot_grid(exp_desc, fra_for_mul, p0, 
+#                     rel_widths = c(0.8, 0.8, 1),
+#                     scale = c(1, 0.7, 0.95), nrow = 1)
+# 
+# bottomRow <- plot_grid(p1, p2, p3,
+#                        rel_widths = c(0.9, 1, 1),
+#                        nrow = 1)
+# 
+# cwplt <- plot_grid(topRow,bottomRow, nrow = 2)
+# 
+# p_topRow <- exp_desc + fra_for_mul + p0 + theme(plot.margin = margin(rep(10, 4), unit = "pt")) +
+#   plot_layout(nrow = 1)
+# 
+# p_bottomRow <- p1 + p2 + p3 + plot_layout(nrow = 1) +
+#   theme(plot.margin = margin(rep(10, 4), unit = "pt"))
+# 
+# fra_title <- textGrob("(B) Number of samples", gp=gpar(fontsize=14))
+# 
+# another_fra <- gtable_add_padding(fra4, unit(c(1.5,0,0,0), "cm"))
+#   
+# another_fra <- gtable_add_grob(another_fra, fra_title, t = 1, l = 1, r = 5)
+# 
+# patch <- exp_desc + another_fra + p0 + 
+#   p1 + p2 + p3 + 
+#   theme(plot.margin = margin(rep(30, 4), unit = "pt")) +
+#   #plot_layout(nrow = 3)
+#   plot_layout(nrow = 2)
+# 
+# print(patch)
+
+# ggsave("patch.pdf", patch, width = 18, height = 10)
+
+```
+
+
+```{r patch_with_labs, include=TRUE, echo=TRUE, fig.width=15, fig.height=9}
+theme_set(
+  theme_bw() +
+    theme(
+      plot.subtitle = element_text(face = "bold")
+    )
+)
+
+
+exp_desc <- ggdraw() + draw_image(image = "output/F1/experiment.png")
+
+gg_fra5 <- as_ggplot(fra5)
+
+gg_fra_w_title <- (fra7)
+
+patch_with_labs <- {exp_desc + labs(title = "")} + 
+  {gg_fra5 + labs(title = "")} +
+  {p0 + labs(title = "")} + 
+  {p1 + labs(title = "Flow")} +
+  {p2 + labs(title = "ATACseq")} +
+  {p3 + labs(title = "RNAseq")} + 
+  theme(plot.margin = margin(rep(30, 4), unit = "pt")) +
+  plot_layout(nrow = 2)
+
+if(produce_pdfs){
+  ggsave("output/F1/figure1_complete.pdf", 
+         patch_with_labs, 
+         width = 18, 
+         height = 10,
+         units = "in",
+         useDingbats = FALSE)
+  
+  ggsave("output/F1/figure1_complete.png", 
+         patch_with_labs,
+         width = 18, 
+         units = "in",
+         dpi = 300)
+}else{
+  print(patch_with_labs)
+}
+
+
+```
+
+
+```{r align_pca_plots, include=TRUE, echo=TRUE}
+
+add_padding_to_plot <- function(x){
+  expand_by_percent = 0.2
+  
+  diff_x <- diff(range(x$data$PC1))
+  diff_y <- diff(range(x$data$PC2))
+  
+  difference <- diff_x - diff_y
+  
+  # if x longer than y, extend y
+  if(difference > 0){
+    x <- x + 
+      xlim(limits = range(x$data$PC1)) +
+      ylim(limits = (range(x$data$PC2) + c(-difference/2, difference/2)))
+  }
+  x <- x + theme(legend.position="bottom", legend.direction="horizontal")
+  
+  x <- x + theme(plot.margin=unit(c(0,5,0,5), "mm"))
+  x <- x + theme(text = element_text(size=14))
+  return(x)
+}
+
+pca_plots <- list(flow_pca = p1, atac_pca = p2, rna_pca = p3)
+
+pca_plots <- lapply(pca_plots, add_padding_to_plot)
+
+pca_combined_tissue <- {pca_plots[[1]] + guides(col = FALSE)} + 
+  pca_plots[[2]] + 
+  {pca_plots[[3]] + guides(col = FALSE)} + 
+  plot_layout(ncol = 3)
+
+if(produce_pdfs){
+  ggsave("output/F1/pca_combined_tissue.pdf", 
+         pca_combined_tissue,
+         width = 12, 
+         height = 4.5,
+         units = "in",
+         useDingbats = FALSE)
+  
+  ggsave("output/F1/pca_combined_tissue.png", 
+         pca_combined_tissue,
+         width = 12, 
+         height = 4.5,
+         units = "in",
+         dpi = 300)
+}else{
+  print(pca_combined_tissue)
+}
+
+# legend on right side + age shape
+
+pca_plots_with_age <- lapply(pca_plots, function(x){
+  #x <- pca_plots[[1]]
+  y <- x + 
+    geom_point(aes(shape = Age, colour = Tissue), size = 2.25) +
+    theme(legend.position = "none",
+          text = element_text(size = 12))
+  
+  return(y)
+  
+})
+
+pca_plots_tissue_age <- {pca_plots_with_age[[1]] +
+    guides(col = FALSE)} + 
+  {pca_plots_with_age[[2]] +
+      guides(col = FALSE)} + 
+  {pca_plots_with_age[[3]] +
+      theme(legend.position="right", legend.direction="vertical")} +
+  plot_layout(ncol = 3)
+
+if(produce_pdfs){
+  ggsave("output/F1/pca_combined_tissue_age.pdf", 
+         pca_plots_tissue_age,
+         width = 12, 
+         height = 4.5,
+         units = "in",
+         useDingbats = FALSE)
+  
+  ggsave("output/F1/pca_combined_tissue_age.png", 
+         pca_plots_tissue_age,
+         width = 12, 
+         height = 4.5,
+         units = "in",
+         dpi = 300)
+}else{
+  print(pca_plots_tissue_age)
+}
+
+# white center
+pca_plots_with_age_and_white <- lapply(pca_plots, function(x){
+  y <- x + 
+    geom_point(aes(shape = Age, colour = Tissue), size = 3) +
+    geom_point(colour = "white", aes(shape = Age), size = 1) +
+    theme(legend.position = "none",
+          text = element_text(size = 12))
+  return(y)
+})
+
+
+mgn <- 3
+
+pca_plots_tissue_age_white <- {pca_plots_with_age_and_white[[1]] +
+    guides(col = FALSE) +
+    theme(plot.margin = margin(rep(mgn,4)))} + 
+  {pca_plots_with_age_and_white[[2]] +
+      guides(col = FALSE) +
+      theme(plot.margin = margin(rep(mgn,4)))} + 
+  {pca_plots_with_age_and_white[[3]] +
+      theme(legend.position="right", legend.direction="vertical",
+            plot.margin = margin(rep(mgn,4)))} +
+  plot_layout(ncol = 3)
+
+if(produce_pdfs){
+  ggsave("output/F1/pca_combined_tissue_age_white.pdf", 
+       pca_plots_tissue_age_white,
+       width = 12, 
+       height = 4.5,
+       units = "in",
+       useDingbats = FALSE)
+
+  ggsave("output/F1/pca_combined_tissue_age_white.png", 
+       pca_plots_tissue_age_white,
+       width = 12, 
+       height = 4.5,
+       units = "in",
+       dpi = 300)
+}else{
+  print(pca_plots_tissue_age_white)
+}
+
+# per strain
+
+pca_plots_strain <- list(plot_flow_list[[4]], plot_list_ATACseq[[4]], plot_RNAseq_list[[4]])
+
+pca_plots_strain <- lapply(pca_plots_strain, add_padding_to_plot)
+
+pca_all_strain <- {pca_plots_strain[[1]] +
+    guides(col = FALSE) +
+    theme(plot.margin = margin(rep(mgn,4)))} + 
+  {pca_plots_strain[[2]] +
+      #guides(col = FALSE) +
+      theme(plot.margin = margin(rep(mgn,4)))} + 
+  {pca_plots_strain[[3]] +
+      guides(col = FALSE) +
+      theme(plot.margin = margin(rep(mgn,4)))} + 
+  plot_layout(ncol = 3)
+
+
+if(produce_pdfs){
+  ggsave("output/F1/pca_combined_strain.pdf", 
+       pca_all_strain,
+       width = 12, 
+       height = 4.5,
+       units = "in",
+       useDingbats = FALSE)
+
+  ggsave("output/F1/pca_combined_strain.png", 
+       pca_all_strain,
+       width = 12, 
+       height = 4.5,
+       units = "in",
+       dpi = 300)
+}else{
+  print(pca_all_strain)
+}
+
+# 
+# all_six <- {exp_desc + labs(title = "")} + 
+#   {gg_fra5 + labs(title = "")} +
+#   {p0 + labs(title = "")} +
+#   pca_plots[[1]] + 
+#   pca_plots[[2]] + 
+#   pca_plots[[3]] + 
+#   theme(plot.margin = margin(rep(50, 4), unit = "pt")) +
+#   plot_layout(ncol = 3, nrow = 2)
+# 
+# pdf("output/F1/patch_with_labs_all.pdf", width = 15, height = 10)
+# all_six
+# dev.off()
+
+
+
+```
+
+
+
+
+
+
+
