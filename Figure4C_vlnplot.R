@@ -1,5 +1,7 @@
 
 #Script to generate expression plots using seurat object.
+#Author : Neerja Katiyar
+
 library(dplyr)
 library(Seurat)
 library(cowplot)

@@ -1,3 +1,5 @@
+#Script to calculate heatmap of percent expressed cells.
+#Author : Neerja Katiyar
 
 library(ggpubr)
 library(pheatmap)
@@ -44,7 +46,6 @@ print(gene)
 
 pdf(paste0("Pheatmap_new_cell_type_vs_age_", gene, ".pdf"), width = 4)
 
-#pdf("pheatmap_prop_table.pdf", width=4)
 pheatmap::pheatmap(pheatmap.val * 100, cluster_cols = FALSE, cluster_rows = FALSE,
         color =  colorRampPalette((brewer.pal(n = 9, name = "Blues")))(length(breaksList)),
         breaks = breaksList, border_color = "white", main = gene, display_numbers = T,
@@ -88,7 +89,6 @@ print(gene)
 
 pdf(paste0("Pheatmap_new_cell_type_vs_age_", gene, ".pdf"), width = 4)
 
-#pdf("pheatmap_prop_table.pdf", width=4)
 pheatmap::pheatmap(pheatmap.val * 100, cluster_cols = FALSE, cluster_rows = FALSE,
         color =  colorRampPalette((brewer.pal(n = 9, name = "Blues")))(length(breaksList)),
         breaks = breaksList, border_color = "white", main = gene, display_numbers = T,
@@ -133,7 +133,6 @@ print(gene)
 
 pdf(paste0("Pheatmap_new_cell_type_vs_age_", gene, ".pdf"), width = 4)
 
-#pdf("pheatmap_prop_table.pdf", width=4)
 pheatmap::pheatmap(pheatmap.val * 100, cluster_cols = FALSE, cluster_rows = FALSE,
         color =  colorRampPalette((brewer.pal(n = 9, name = "Blues")))(length(breaksList)),
         breaks = breaksList, border_color = "white", main = gene, display_numbers = T,
@@ -178,7 +177,6 @@ print(gene)
 
 pdf(paste0("Pheatmap_new_cell_type_vs_age_", gene, ".pdf"), width = 4)
 
-#pdf("pheatmap_prop_table.pdf", width=4)
 pheatmap::pheatmap(pheatmap.val * 100, cluster_cols = FALSE, cluster_rows = FALSE,
         color =  colorRampPalette((brewer.pal(n = 9, name = "Blues")))(length(breaksList)),
         breaks = breaksList, border_color = "white", main = gene, display_numbers = T,
