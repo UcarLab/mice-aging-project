@@ -1,0 +1,177 @@
+
+library(fgsea)
+library(data.table)
+library(ggplot2)
+library(dplyr)
+library(psych)
+
+ens2gene <- function(genes){
+  genome <- annotables::grcm38
+
+  # ens to gene symbol mapping
+  mapping <-
+    base::subset(genome,
+                 genome$ensgene %in% genes,
+                 select = c('ensgene', 'symbol'))
+
+    m <- match(genes, mapping$ensgene)
+
+    sym.genes <- mapping$symbol[m]
+    names(sym.genes) <- genes
+
+    return(sym.genes)
+}
+
+####################################################################
+file_mem_B6 <- read.csv("../All_DE_results/MEMORY_Age18vs3_B6_RNAseq.csv", sep=",", header=T)
+file_mem_B6_sorted <- file_mem_B6[order(file_mem_B6$logFC, decreasing=TRUE),]
+
+file_mem_NZO <- read.csv("../All_DE_results/MEMORY_Age18vs3_NZO_RNAseq.csv", sep=",", header=T)
+file_mem_NZO_sorted <- file_mem_NZO[order(file_mem_NZO$logFC, decreasing=TRUE),]
+
+file_naive_B6 <- read.csv("../All_DE_results/NAIVE_Age18vs3_B6_RNAseq.csv", sep=",", header=T)
+file_naive_B6_sorted <- file_naive_B6[order(file_naive_B6$logFC, decreasing=TRUE),]
+
+file_naive_NZO <- read.csv("../All_DE_results/NAIVE_Age18vs3_NZO_RNAseq.csv", sep=",", header=T)
+file_naive_NZO_sorted <- file_naive_NZO[order(file_naive_NZO$logFC, decreasing=TRUE),]
+
+file_pbl_B6 <- read.csv("../All_DE_results/PBL_Age18vs3_B6_RNAseq.csv", sep=",", header=T)
+file_pbl_B6_sorted <- file_pbl_B6[order(file_pbl_B6$logFC, decreasing=TRUE),]
+
+file_pbl_NZO <- read.csv("../All_DE_results/PBL_Age18vs3_NZO_RNAseq.csv", sep=",", header=T)
+file_pbl_NZO_sorted <- file_pbl_NZO[order(file_pbl_NZO$logFC, decreasing=TRUE),]
+
+file_spleen_B6 <- read.csv("../All_DE_results/SPLEEN_Age18vs3_B6_RNAseq.csv", sep=",", header=T)
+file_spleen_B6_sorted <- file_spleen_B6[order(file_spleen_B6$logFC, decreasing=TRUE),]
+
+file_spleen_NZO <- read.csv("../All_DE_results/SPLEEN_Age18vs3_NZO_RNAseq.csv", sep=",", header=T)
+file_spleen_NZO_sorted <- file_spleen_NZO[order(file_spleen_NZO$logFC, decreasing=TRUE),]
+####################################################################
+
+#genelist_Taa <- c("Gzmk", "Ccl5", "Ifng", "Pdcd1", "Tigit", "Lag3", "Tox")
+#genelist_AP1 <- c("Jdp2", "Atf6", "Maf", "Batf3", "Mafb", "Mafa", "Mafg", "Atf5", "Atf3", "Batf2", "Atf2", "Atf7", "Atf6b", "Batf", "Junb", "Fos", "Jun", "Fosb", "Jund", "Atf4", "Maff", "Mafk")
+#genelist_all <- c("Jdp2", "Atf6", "Maf", "Batf3", "Mafb", "Mafa", "Mafg", "Atf5", "Atf3", "Batf2", "Atf2", "Atf7", "Atf6b", "Batf", "Junb", "Fos", "Jun", "Fosb", "Jund", "Atf4", "Maff", "Mafk", "Gzmk", "Ccl5", "Ifng", "Pdcd1", "Tigit", "Lag3", "Tox")
+#genelist_AP1 <- c("Junb", "Fos", "Jun", "Fosb", "Jund", "Atf4")
+
+file_mem_B6_sorted$gene <- ens2gene(file_mem_B6_sorted$Gene.Ensembl)
+file_mem_NZO_sorted$gene <- ens2gene(file_mem_NZO_sorted$Gene.Ensembl)
+
+file_naive_B6_sorted$gene <- ens2gene(file_naive_B6_sorted$Gene.Ensembl)
+file_naive_NZO_sorted$gene <- ens2gene(file_naive_NZO_sorted$Gene.Ensembl)
+
+file_pbl_B6_sorted$gene <- ens2gene(file_pbl_B6_sorted$Gene.Ensembl)
+file_pbl_NZO_sorted$gene <- ens2gene(file_pbl_NZO_sorted$Gene.Ensembl)
+
+file_spleen_B6_sorted$gene <- ens2gene(file_spleen_B6_sorted$Gene.Ensembl)
+file_spleen_NZO_sorted$gene <- ens2gene(file_spleen_NZO_sorted$Gene.Ensembl)
+####################################################################
+####################################################################
+common_genes <- Reduce(intersect, list(file_mem_B6_sorted$Gene.Ensembl,file_mem_NZO_sorted$Gene.Ensembl,file_naive_B6_sorted$Gene.Ensembl, file_naive_NZO_sorted$Gene.Ensembl, file_pbl_B6_sorted$Gene.Ensembl, file_pbl_NZO_sorted$Gene.Ensembl, file_spleen_B6_sorted$Gene.Ensembl, file_spleen_NZO_sorted$Gene.Ensembl))
+
+file_mem_B6_subset_common <- subset(file_mem_B6_sorted, file_mem_B6_sorted$Gene.Ensembl %in% common_genes)
+file_mem_NZO_subset_common <- subset(file_mem_NZO_sorted, file_mem_NZO_sorted$Gene.Ensembl %in% common_genes)
+
+file_naive_B6_subset_common <- subset(file_naive_B6_sorted, file_naive_B6_sorted$Gene.Ensembl %in% common_genes)
+file_naive_NZO_subset_common <- subset(file_naive_NZO_sorted, file_naive_NZO_sorted$Gene.Ensembl %in% common_genes)
+
+file_pbl_B6_subset_common <- subset(file_pbl_B6_sorted, file_pbl_B6_sorted$Gene.Ensembl %in% common_genes)
+file_pbl_NZO_subset_common <- subset(file_pbl_NZO_sorted, file_pbl_NZO_sorted$Gene.Ensembl %in% common_genes)
+
+file_spleen_B6_subset_common <- subset(file_spleen_B6_sorted, file_spleen_B6_sorted$Gene.Ensembl %in% common_genes)
+file_spleen_NZO_subset_common <- subset(file_spleen_NZO_sorted, file_spleen_NZO_sorted$Gene.Ensembl %in% common_genes)
+
+#Add a rank column
+file_mem_B6_subset_common$rank <- rank(abs(file_mem_B6_subset_common$logFC))
+rank_mem_B6 = file_mem_B6_subset_common %>% mutate(rank = order(logFC, decreasing = T))
+print(length(unique(rank_mem_B6$Gene.Ensembl)))
+write.table(rank_mem_B6, "Rank_mem_B6.txt", sep="\t", quote=FALSE)
+
+file_mem_NZO_subset_common$rank <- rank(abs(file_mem_NZO_subset_common$logFC))
+rank_mem_NZO = file_mem_NZO_subset_common %>% mutate(rank = order(logFC, decreasing = T))
+print(length(unique(rank_mem_NZO$Gene.Ensembl)))
+write.table(rank_mem_NZO, "Rank_mem_NZO.txt", sep="\t", quote=FALSE)
+
+file_naive_B6_subset_common$rank <- rank(abs(file_naive_B6_subset_common$logFC))
+rank_naive_B6 = file_naive_B6_subset_common %>% mutate(rank = order(logFC, decreasing = T))
+print(length(unique(rank_naive_B6$Gene.Ensembl)))
+write.table(rank_naive_B6, "Rank_naive_B6.txt", sep="\t", quote=FALSE)
+
+file_naive_NZO_subset_common$rank <- rank(abs(file_naive_NZO_subset_common$logFC))
+rank_naive_NZO = file_naive_NZO_subset_common %>% mutate(rank = order(logFC, decreasing = T))
+print(length(unique(rank_naive_NZO$Gene.Ensembl)))
+write.table(rank_naive_NZO, "Rank_naive_NZO.txt", sep="\t", quote=FALSE)
+
+file_pbl_B6_subset_common$rank <- rank(abs(file_pbl_B6_subset_common$logFC))
+rank_pbl_B6 = file_pbl_B6_subset_common %>% mutate(rank = order(logFC, decreasing = T))
+print(length(unique(rank_pbl_B6$Gene.Ensembl)))
+write.table(rank_pbl_B6, "Rank_pbl_B6.txt", sep="\t", quote=FALSE)
+
+file_pbl_NZO_subset_common$rank <- rank(abs(file_pbl_NZO_subset_common$logFC))
+rank_pbl_NZO = file_pbl_NZO_subset_common %>% mutate(rank = order(logFC, decreasing = T))
+print(length(unique(rank_pbl_NZO$Gene.Ensembl)))
+write.table(rank_pbl_NZO, "Rank_pbl_NZO.txt", sep="\t", quote=FALSE)
+
+file_spleen_B6_subset_common$rank <- rank(abs(file_spleen_B6_subset_common$logFC))
+rank_spleen_B6 = file_spleen_B6_subset_common %>% mutate(rank = order(logFC, decreasing = T))
+print(length(unique(rank_spleen_B6$Gene.Ensembl)))
+write.table(rank_spleen_B6, "Rank_spleen_B6.txt", sep="\t", quote=FALSE)
+
+file_spleen_NZO_subset_common$rank <- rank(abs(file_spleen_NZO_subset_common$logFC))
+rank_spleen_NZO = file_spleen_NZO_subset_common %>% mutate(rank = order(logFC, decreasing = T))
+print(length(unique(rank_spleen_NZO$Gene.Ensembl)))
+write.table(rank_spleen_NZO, "Rank_spleen_NZO.txt", sep="\t", quote=FALSE)
+
+###################--------------------------------------------###################
+#common_genes_sub <- common_genes[1:10]
+
+n=1
+gene_list <- list()
+ranks_genes <- list()
+
+tissues_B6 <- list(rank_mem_B6, rank_naive_B6, rank_pbl_B6, rank_spleen_B6)
+tissues_NZO <- list(rank_mem_NZO, rank_naive_NZO, rank_pbl_NZO, rank_spleen_NZO)
+
+for (i in common_genes) {
+#print(i)
+gene_ranks_final_score = 0
+n =1
+
+for (j in 1:length(tissues_B6)) { 
+
+df1 <- as.data.frame(tissues_B6[n])
+df2 <- as.data.frame(tissues_NZO[n])
+
+n = n+1
+
+gene_tissue_B6 <- df1 %>% filter(Gene.Ensembl == i)
+gene_tissue_NZO <- df2 %>% filter(Gene.Ensembl == i)
+
+gene_ranks_new <- c((1/gene_tissue_B6$rank), (1/gene_tissue_NZO$rank))
+#print(gene_ranks_new)
+#gene_rank_score <- exp(mean(log(gene_ranks_new)))
+#print(gene_rank_score)
+gene_rank_score <- geometric.mean(gene_ranks_new)
+#print("gene rank score for each tissue")
+#print(gene_rank_score)
+gene_ranks_final_score = gene_ranks_final_score + gene_rank_score
+
+#print(j)
+}
+gene_list[i] <- i
+ranks_genes[i] <- gene_ranks_final_score
+}
+
+#print(head(gene_list))
+#print(head(names(ranks_genes)))
+print(head(ranks_genes))
+print(class(ranks_genes))
+
+df_total <- as.data.frame(do.call(rbind, ranks_genes))
+names(df_total) <- c("Score")
+df_total$normalized_score <- df_total$Score/length(common_genes)
+df_total$Ensembl_Gene <- rownames(df_total)
+
+df_total$gene <- ens2gene(df_total$Ensembl_Gene)
+write.table(df_total, "MAG_tissues_all.txt", sep="\t", quote=FALSE, row.names=FALSE)
+
+
