@@ -1,4 +1,7 @@
 
+#title - Gene set enrichment analysis using AP1 geneset.
+#Author : Neerja Katiyar
+
 library(fgsea)
 library(data.table)
 library(ggplot2)

@@ -1,4 +1,8 @@
 
+# title - Calculate MAG (Magnitude association score) score.
+#Author : Neerja Katiyar
+
+
 library(fgsea)
 library(data.table)
 library(ggplot2)
