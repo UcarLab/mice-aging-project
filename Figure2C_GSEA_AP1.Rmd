@@ -7,7 +7,7 @@ output: workflowr::wflow_html
 editor_options:
   chunk_output_type: console
 ---
-# Prepare the environment
+### Prepare the environment
 
 ```{r setup, include=FALSE}
 require(knitr)
@@ -20,6 +20,7 @@ library(fgsea)
 library(data.table)
 library(ggplot2)
 ```
+### Plot enrichment
 
 ```{r function_plot_enrich, include=TRUE, echo=TRUE}
 # Modified function definition of plotEnrichment function
