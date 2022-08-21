@@ -1,6 +1,21 @@
 
-#title - PCA plots from RNA seq data using top AP1 genes.
-#Author - Onur, Neerja Katiyar
+---
+title: "PCA plots from RNA seq data using top AP1 genes"
+author: "E Onur Karakaslar, Neerja Katiyar"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: workflowr::wflow_html
+editor_options:
+  chunk_output_type: console
+---
+# Prepare the environment
+
+```{r setup, include=FALSE}
+require(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+opts_knit$set(root.dir = "/Users/katiyn/Dropbox (JAX)/MouseAging_clean/Mice_aging_NK_resubmission/code/") #set root dir!
+```
+
+```{r libraries, include=TRUE, echo=TRUE}
 
 library(readr)
 library(VennDiagram)
@@ -8,8 +23,10 @@ library(ggplot2)
 library(grDevices)
 library(edgeR)
 library(dplyr)
+```
 
-source("../code/color_values.R")
+```{r convert_geneID, include=TRUE, echo=TRUE}
+source("./color_values.R")
 
 gene2ens <- function(genes){
   
@@ -28,22 +45,19 @@ gene2ens <- function(genes){
     
     return(ens.genes)
 }
-
+```
+```{r plot_PCA, include=TRUE, echo=TRUE}
 ap1.genes <- c("Fos", "Fosb", "Jun", "Junb", "Maff")
-
-length(ap1.genes)
-
 ap1.genes.ens <- gene2ens(ap1.genes)
 
 ## Load Onur's data
-count.matrix <- read.csv('../rna_count_matrix.csv', row.names = 1, check.names = F, stringsAsFactors = F)
+count.matrix <- read.csv('./data/rna_count_matrix.csv', row.names = 1, check.names = F, stringsAsFactors = F)
 
 # Order genes according to their standard deviation in decreasing order
 count.matrix <- count.matrix [rev(order(apply(count.matrix, 1, sd))),]
 
 # Remove duplicated genes
 count.matrix <- count.matrix [!duplicated(rownames(count.matrix)),]
-
 
 # Enforce all counts to be integers
 count.matrix <- round(count.matrix, 0)
@@ -147,7 +161,7 @@ plot.pca.ap1.mice <- ggplot(plot.df, aes(PC1, PC2, color = Age, shape = TCT)) +
     scale_color_manual(values = color_values) + 
     scale_shape_manual(values=c(15:18))
 
-ggsave(filename = "plot_PCA_AP1_mice.pdf", 
+ggsave(filename = "./output/plot_PCA_AP1_mice.pdf", 
        plot = plot.pca.ap1.mice, 
        useDingbats = FALSE, width = 7, height = 5)
 
@@ -162,9 +176,7 @@ plot.pca.ap1.mice.wo12 <- ggplot(plot.df %>% filter(Age != 12),
     scale_color_manual(values = color_values) + 
     scale_shape_manual(values=c(15:18))
 
-pdf("plot_PCA_AP1_mice_wo12.pdf", width=7, height=5)
+pdf("./output/plot_PCA_AP1_mice_wo12.pdf", width=7, height=5)
 print(plot.pca.ap1.mice.wo12)
 dev.off()
-#ggsave(filename = "plot_PCA_AP1_mice_wo12.pdf", 
-#       plot = plot.pca.ap1.mice.wo12, 
-#       useDingbats = FALSE, width = 7, height = 20)
+```

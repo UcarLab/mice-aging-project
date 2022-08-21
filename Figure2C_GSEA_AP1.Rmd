@@ -1,11 +1,27 @@
 
-#title - Gene set enrichment analysis using AP1 geneset.
-#Author : Neerja Katiyar
+---
+title: "Gene set enrichment analysis using AP1 geneset"
+author: "Neerja Katiyar"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: workflowr::wflow_html
+editor_options:
+  chunk_output_type: console
+---
+# Prepare the environment
 
+```{r setup, include=FALSE}
+require(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+opts_knit$set(root.dir = "/Users/katiyn/Dropbox (JAX)/MouseAging_clean/Mice_aging_NK_resubmission/code/") #set root dir!
+```
+
+```{r libraries, include=TRUE, echo=TRUE}
 library(fgsea)
 library(data.table)
 library(ggplot2)
+```
 
+```{r function_plot_enrich, include=TRUE, echo=TRUE}
 # Modified function definition of plotEnrichment function
 
 plotEnrichment_new <- function(pathway, stats, gseaParam = 1, ticksSize = 0.2) 
@@ -39,18 +55,15 @@ plotEnrichment_new <- function(pathway, stats, gseaParam = 1, ticksSize = 0.2)
         labs(x = "rank", y = "enrichment score")
     return(g)
 }
+```
 
-####################################################################
-MAG_tissues <- read.table("../../MAG_RNAseq_analysis/MAG_tissues_all.txt", sep="\t", header=T)
+```{r gsea_analysis_MAG, include=TRUE, echo=TRUE}
+MAG_tissues <- read.table("./output/MAG_tissues_all.txt", sep="\t", header=T)
 MAG_tissues_sorted <- MAG_tissues[order(MAG_tissues$Score, decreasing=TRUE),]
 
-####################################################################
-
-#genelist_Taa <- c("Gzmk", "Ccl5", "Ifng", "Pdcd1", "Tigit", "Lag3", "Tox")
-inflammatory_orig_file <- read.table("../Mice_pathways/nanostring_v2_mouse_inflammatory_markers.txt", sep="\t", header=T)
+inflammatory_orig_file <- read.table("./data/nanostring_v2_mouse_inflammatory_markers.txt", sep="\t", header=T)
 gene <- inflammatory_orig_file$GeneName
 inflammatory_list <- as.list(as.data.frame(gene))
-#names(inflammatory_list) <- "inflammatory_nanostring"
 
 genelist_AP1 <- c("Jdp2", "Atf6", "Maf", "Batf3", "Mafb", "Mafa", "Mafg", "Atf5", "Atf3", "Batf2", "Atf2", "Atf7", "Atf6b", "Batf", "Junb", "Fos", "Jun", "Fosb", "Jund", "Atf4", "Maff", "Mafk")
 
@@ -59,33 +72,24 @@ names(genesets) <- c("Inflammatory_list", "AP1_geneset")
 
 genesets <- genesets[!duplicated(names(genesets))]
 
-#MAG_tissues_sorted$gene <- ens2gene(file_mem_B6_sorted$Gene.Ensembl)
-#file_mem_NZO_sorted$gene <- ens2gene(file_mem_NZO_sorted$Gene.Ensembl)
-
-####################################################################
-
 MAG_sorted_inp <- MAG_tissues_sorted$Score
 names(MAG_sorted_inp) <- MAG_tissues_sorted$gene
 
 print("Starting fgsea....")
-####################################################################
-
 fgsea_MAG <- fgsea(pathways = genesets, stats = MAG_sorted_inp)
 print(length(MAG_sorted_inp))
 print(head(MAG_sorted_inp))
 fgsea_MAG_df <- as.data.frame(apply(fgsea_MAG,2,as.character))
 fgsea_MAG_df_sorted <- fgsea_MAG_df[order(fgsea_MAG_df$padj),]
 write.table(fgsea_MAG_df, "GSEA_fgsea_MAG_inflammatory_AP1_out.txt", sep="\t", quote=FALSE, row.names=FALSE)
+```
 
-####################################################################
-
-pdf("GSEA_fgsea_MAG_inflammatory_enrichplot_top.pdf")
+```{r write_gsea_plots, include=TRUE, echo=TRUE}
+pdf("./output/GSEA_fgsea_MAG_inflammatory_enrichplot_top.pdf")
 plotEnrichment(genesets[[head(fgsea_MAG_df_sorted, 1)$pathway]], MAG_sorted_inp) + labs(title=head(fgsea_MAG_df_sorted,1)$pathway)
 dev.off()
 
-pdf("GSEA_fgsea_MAG_AP1_enrichplot.pdf")
+pdf("./output/GSEA_fgsea_MAG_AP1_enrichplot.pdf")
 plotEnrichment(genesets[[tail(fgsea_MAG_df_sorted, 1)$pathway]], MAG_sorted_inp) + labs(title=tail(fgsea_MAG_df_sorted, 1)$pathway)
 dev.off()
-
-##################################################
-
+```

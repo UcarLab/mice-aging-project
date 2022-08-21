@@ -14,11 +14,6 @@ palette[1] <- "#adadad"
 tm_obj <- readRDS("../spleen_seurat_subset_rename_ident_Oct24.rds")
 summary(tm_obj@meta.data)
 
-#tm_obj <- RunUMAP(tm_obj, dims = 1:10)
-#pdf("UMAP_Tabula_muris.pdf")
-#DimPlot(tm_obj, reduction = "umap")
-#dev.off()
-
 pdf("UMAP_Tabula_muris_split_age.pdf")
 DimPlot(tm_obj, reduction = "umap", split.by = "age")
 dev.off()

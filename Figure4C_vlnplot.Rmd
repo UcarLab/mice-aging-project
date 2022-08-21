@@ -1,7 +1,21 @@
 
-#Script to generate expression plots using seurat object.
-#Author : Neerja Katiyar
+---
+title: "Script to generate expression plots using seurat object"
+author: "Neerja Katiyar"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: workflowr::wflow_html
+editor_options:
+  chunk_output_type: console
+---
+### Prepare the environment
 
+```{r setup, include=FALSE}
+require(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+opts_knit$set(root.dir = "/Users/katiyn/Dropbox (JAX)/MouseAging_clean/Mice_aging_NK_resubmission/code/") #set root dir!
+```
+
+```{r libraries, include=TRUE, echo=TRUE}
 library(dplyr)
 library(Seurat)
 library(cowplot)
@@ -15,9 +29,11 @@ library(gridBase)
 library(gridExtra)
 library(tidyr)
 library(cowplot)
+```
 
+###Generate expression plots.
+```{r func_generate_violinplot_piechart, include=TRUE, echo=TRUE}
 gene_Vln_Pie <- function(mydata, gene_name, Celltype) {
-	#Celltype <- "Luminal-AV"
 	subset_celltype <- subset(mydata, idents = Celltype)
         subset_celltype$celltype.stim <- paste(Idents(subset_celltype), subset_celltype$age, sep = "_")
         subset_celltype$celltype <- Idents(subset_celltype)
@@ -35,8 +51,8 @@ gene_Vln_Pie <- function(mydata, gene_name, Celltype) {
         celltype <- subset_celltype_gene@meta.data$celltype
         df_final_AV <- cbind(exprn_val_df, celltype_age, celltype)
         names(df_final_AV) <- c("exprn", "celltype_age", "celltype")
-	print(celltype)
-	print(table(df_final_AV$celltype_age))
+	#print(celltype)
+	#print(table(df_final_AV$celltype_age))
 
 	a <- as.data.frame(table(subset_celltype_gene$celltype.stim))
 	b <- as.data.frame(table(subset_celltype$celltype.stim))
@@ -59,7 +75,7 @@ gene_Vln_Pie <- function(mydata, gene_name, Celltype) {
     	scale_fill_manual(values=c("springgreen", "deepskyblue")) + geom_jitter(shape=16, position=position_jitter(0.2),cex=5) +
     	xlab("Sample")+ylab("Expression")+
     	theme(plot.margin = unit(c(4,4,20,10), "cm"))+ggtitle(gene_name)+theme(plot.title = element_text(hjust = 0.5, size=80))+ theme(axis.text.x=element_text(size=60, angle=90), axis.text.y = element_text(size = 60), axis.title.x = element_text(size = 60), axis.title.y = element_text(size = 60), legend.title=element_text(size=60), legend.text=element_text(size=60))+theme(legend.key.size = unit(2, "cm"))
-
+	
 	###### Pie chart #########################
 	cells_pie_long$Celltype = factor(cells_pie_long$Celltype, levels=level_order)
 	pie_all <- ggplot(data = cells_pie_long, aes(x="", y=cells, fill=condition)) + geom_bar(stat = "identity", position = "fill") + theme_void() +
@@ -69,11 +85,10 @@ gene_Vln_Pie <- function(mydata, gene_name, Celltype) {
 	coord_polar(theta = "y", start=0) + facet_wrap(~Celltype, nrow=1) + scale_fill_grey() + theme(legend.position = "right", legend.title = element_text(size = 10), legend.text = element_text(size = 10), legend.key.size = unit(1, 'cm'))
 
 	Celltype = gsub("/", "_or_", Celltype)
-	outfile = paste0("./Violin_plots/","VlnPlot_Pie_chart_",Celltype, "_", gene_name, "_new", ".pdf")
-	outfile1 = paste0("./Violin_plots/","VlnPlot_",Celltype, "_", gene_name, "_new", ".pdf")
-	outfile2 = paste0("./Violin_plots/","Pie_chart_",Celltype, "_", gene_name, "_new", ".pdf")
+	outfile = paste0("./output/","VlnPlot_Pie_chart_",Celltype, "_", gene_name, "_new", ".pdf")
+	outfile1 = paste0("./output/","VlnPlot_",Celltype, "_", gene_name, "_new", ".pdf")
+	outfile2 = paste0("./output/","Pie_chart_",Celltype, "_", gene_name, "_new", ".pdf")
 
-#pdf("VlnPlot_Pie_chart_comb.pdf", width=120, height=40)
 	pdf(file = outfile, width=40, height=40)
 	print(ggdraw()+draw_plot(vlnplot_n, x=0, y=0, width=1, height=1)+draw_plot(pie_all, x=0.2, y=-0.4, width=0.35))
 	dev.off()
@@ -86,9 +101,12 @@ gene_Vln_Pie <- function(mydata, gene_name, Celltype) {
 	print(ggdraw()+draw_plot(pie_only))
 	dev.off()
 }
+```
+
 ############################################
 
-dir.create("Violin_plots")
+```{r , include=TRUE, echo=TRUE}
+
 args <- commandArgs(TRUE)
 if (length(args) < 3) {
   stop("Seurat object, gene name and Celltype must be supplied (input file).n", call.=FALSE)
@@ -97,19 +115,11 @@ if (length(args) < 3) {
 print("Generating Violinplots and Piecharts for gene expression for young and old ...")
 }
 
-#args[1] = "/projects/anczukow-lab/neerja_projects/Integrate_expt1_expt2_only/Analysis_PC_10_mt10/RDS_files/seuratObject_rename_ident_May26_2021.rds"
-#args[2] = "Pdk4"
-#args[3] = "Luminal-AV"
-
-mydata = readRDS(args[1]) # spleen_seurat_subset_rename_ident_Oct24.rds
-gene_name = args[2]
-Celltype = args[3]
-
-#mydata_subset_TM1 <- subset(mydata, subset = expt == "tabula_muris")
-#mydata_subset_TM2 <- subset(mydata_subset_TM1, subset = age == c("mm10_3mths_TM", "mm10_18mths_TM"))
-#mydata_subset_TM2 <- subset(mydata, subset = age == c("3m", "18m"))
+mydata = readRDS(args[1]) #spleen_seurat_subset_rename_ident_Oct24.rds
+gene_name = args[2] #Jun
+Celltype = args[3] #Tcells
 
 #Call function to generate plots.
 gene_Vln_Pie(mydata, gene_name, Celltype)
-
+```
 
