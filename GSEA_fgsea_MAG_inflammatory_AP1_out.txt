@@ -1,0 +1,3 @@
+pathway	pval	padj	log2err	ES	NES	size	leadingEdge
+AP1_geneset	0.000524025778689653	0.000524025778689653	0.477270815362862	0.990452714113267	2.09573841354401	18	c("Fos", "Fosb", "Jun", "Junb", "Maff")
+Inflammatory_list	0.00026658197117744	0.000524025778689653	0.49849310876659	0.931719719096383	1.90984778204825	151	c("Fos", "Jun", "Ccl4", "Cebpb", "Tnfaip3", "Fasl", "Ccl5", "H2-Eb1", "Maff", "Tlr4")
